@@ -1,0 +1,271 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-paper: #F8F6F1;
+  --color-sheet: #FFFDF9;
+  --color-parchment: #F2EFE9;
+  --color-parchment-hover: #EAE5DB;
+  --color-rule: #E5E0D5;
+  --color-rule-strong: #D5CEBF;
+  --color-ink: #1F1D1A;
+  --color-ink-muted: #6B655C;
+  --color-ink-faint: #968E82;
+  --color-ledger: #1B4D3E;
+  --color-ledger-hover: #143B2F;
+  --color-ledger-soft: #EBF3F0;
+  --color-credit: #157347;
+  --color-warn: #B45309;
+  --color-debit: #B91C1C;
+}
+
+:root {
+  --bg-canvas: #F8F6F1;
+  --bg-sheet: #FFFDF9;
+  --bg-parchment: #F2EFE9;
+  --border-rule: #E5E0D5;
+  --text-ink: #1F1D1A;
+  --text-muted: #6B655C;
+  --accent-ledger: #1B4D3E;
+}
+
+html,
+body {
+  background-color: var(--bg-canvas);
+  color: var(--text-ink);
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.font-display {
+  font-family: var(--font-display);
+  text-wrap: balance;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Warm Paper Ledger Surface Harmonization for Embedded Legacy Report Submodules */
+.workspace-content {
+  color: #1F1D1A;
+}
+
+.workspace-content .bg-\[\#121214\],
+.workspace-content .bg-\[rgba\(18\,18\,20\,0\.9\)\] {
+  background-color: #FFFDF9 !important;
+  color: #1F1D1A !important;
+  border-color: #E5E0D5 !important;
+  box-shadow: none !important;
+}
+
+.workspace-content .bg-zinc-950,
+.workspace-content .bg-zinc-900\/60,
+.workspace-content .bg-zinc-950\/60 {
+  background-color: #F8F6F1 !important;
+  color: #1F1D1A !important;
+}
+
+.workspace-content .bg-zinc-900,
+.workspace-content .bg-zinc-900\/40,
+.workspace-content .bg-zinc-800\/60 {
+  background-color: #F2EFE9 !important;
+  color: #1F1D1A !important;
+  border-color: #E5E0D5 !important;
+}
+
+.workspace-content .bg-zinc-900\/30 {
+  background-color: #FFFDF9 !important;
+  border-color: #E5E0D5 !important;
+}
+
+.workspace-content .bg-zinc-800 {
+  background-color: #EAE5DB !important;
+  color: #1F1D1A !important;
+}
+
+.workspace-content .border-zinc-850,
+.workspace-content .border-zinc-800,
+.workspace-content .border-zinc-900,
+.workspace-content .border-zinc-700\/60 {
+  border-color: #E5E0D5 !important;
+}
+
+.workspace-content .text-zinc-100,
+.workspace-content .text-zinc-150 {
+  color: #1F1D1A !important;
+}
+
+.workspace-content .text-zinc-200,
+.workspace-content .text-zinc-250,
+.workspace-content .text-zinc-300 {
+  color: #3D3933 !important;
+}
+
+.workspace-content .text-zinc-400,
+.workspace-content .text-zinc-450 {
+  color: #6B655C !important;
+}
+
+.workspace-content .text-zinc-500,
+.workspace-content .text-zinc-550 {
+  color: #968E82 !important;
+}
+
+.workspace-content .text-emerald-400,
+.workspace-content .text-emerald-450 {
+  color: #157347 !important;
+}
+
+.workspace-content .text-indigo-400 {
+  color: #1B4D3E !important;
+}
+
+.workspace-content .bg-emerald-600 {
+  background-color: #1B4D3E !important;
+  color: #FFFDF9 !important;
+}
+
+.workspace-content .bg-emerald-600:hover,
+.workspace-content .hover\:bg-emerald-500:hover {
+  background-color: #143B2F !important;
+}
+
+.workspace-content .text-red-400,
+.workspace-content .text-red-550 {
+  color: #B91C1C !important;
+}
+
+.workspace-content .bg-rose-950\/20,
+.workspace-content .bg-red-950\/20,
+.workspace-content .bg-red-950\/30 {
+  background-color: #FEF2F2 !important;
+  color: #B91C1C !important;
+  border-color: #FECACA !important;
+}
+
+.workspace-content .bg-emerald-950\/30,
+.workspace-content .bg-emerald-900\/20,
+.workspace-content .bg-emerald-950\/25 {
+  background-color: #EBF3F0 !important;
+  color: #157347 !important;
+  border-color: #C7DFD6 !important;
+}
+
+.workspace-content .bg-indigo-950\/30,
+.workspace-content .bg-indigo-900\/30 {
+  background-color: #F2EFE9 !important;
+  color: #1B4D3E !important;
+  border-color: #D5CEBF !important;
+}
+
+/* Warm Paper Form Controls inside Legacy Modules */
+.workspace-content input::placeholder,
+.workspace-content select::placeholder,
+.workspace-content textarea::placeholder {
+  color: #968E82;
+}
+
+/* Subtle Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F2EFE9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D5CEBF;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #B8AF9F;
+}
+
+/* Clean Archival Print Styles */
+@media print {
+  header,
+  aside,
+  button,
+  input,
+  select,
+  textarea,
+  .no-print,
+  .action-column,
+  nav,
+  iframe {
+    display: none !important;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+    color: #1F1D1A !important;
+    height: auto !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    font-size: 10.5pt !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .workspace-content {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 8mm 10mm !important;
+    overflow: visible !important;
+    display: block !important;
+    position: static !important;
+  }
+
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    page-break-inside: auto !important;
+    margin-top: 12px !important;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+    page-break-after: auto !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  th {
+    border-bottom: 1.5px solid #1F1D1A !important;
+    border-top: 1px solid #D5CEBF !important;
+    padding: 7px 10px !important;
+    color: #1F1D1A !important;
+    font-weight: 600 !important;
+    font-size: 9pt !important;
+    background: #F8F6F1 !important;
+  }
+
+  td {
+    border-bottom: 1px solid #E5E0D5 !important;
+    padding: 7px 10px !important;
+    color: #1F1D1A !important;
+    font-size: 9pt !important;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    color: #1F1D1A !important;
+    page-break-after: avoid !important;
+  }
+}

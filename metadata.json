@@ -1,0 +1,10 @@
+{
+  "name": "Tunzua ERP Task & Ledger",
+  "description": "Enterprise offline-first synced general ledger, task tracker, GST portals computator, fixed assets depreciation logger, statutory payroll, and bank statement reconciling feed.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
