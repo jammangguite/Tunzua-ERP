@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { useStore } from '../store';
 import { DateSearchBar } from '../components/DateSearchBar';
 import { ClickablePath } from '../components/ClickablePath';
@@ -20,6 +21,7 @@ const TYPE_LABELS: Record<string, string> = {
 
 const Daybook: React.FC = () => {
   const { db, formatMoney } = useStore();
+  const outletCtx = useOutletContext<{ openPrintPreview?: () => void }>() || {};
 
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
@@ -115,11 +117,11 @@ const Daybook: React.FC = () => {
           </button>
           <button
             type="button"
-            onClick={() => window.print()}
-            className="px-3.5 py-2 bg-[#1B4D3E] hover:bg-[#143B2F] text-[#FFFDF9] font-semibold text-xs rounded-lg flex items-center gap-1.5 cursor-pointer transition-colors"
+            onClick={() => (outletCtx.openPrintPreview ? outletCtx.openPrintPreview() : window.print())}
+            className="px-3.5 py-2 bg-[#1B4D3E] hover:bg-[#143B2F] text-[#FFFDF9] font-semibold text-xs rounded-lg flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap"
           >
             <Printer className="w-3.5 h-3.5" />
-            Print
+            Print Preview
           </button>
         </div>
       </div>

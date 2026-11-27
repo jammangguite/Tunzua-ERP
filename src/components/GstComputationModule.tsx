@@ -162,7 +162,7 @@ export const GstComputationModule: React.FC = () => {
       setConfirmChallan(false);
       return;
     }
-    addLedgerTransaction({
+    const res = addLedgerTransaction({
       id: `gst-pmt-${Date.now()}`,
       date: new Date().toISOString().split('T')[0],
       description: `GST PMT-06 Cash Challan Settlement (${activePeriod.label})`,
@@ -173,6 +173,11 @@ export const GstComputationModule: React.FC = () => {
       reference: `PMT06-${activePeriod.fp}`,
       isBankCleared: true,
     });
+    if (!res.ok) {
+      toast.error(res.error || 'A challan entry with this reference already exists.');
+      setConfirmChallan(false);
+      return;
+    }
     triggerSync();
     setConfirmChallan(false);
     toast.success(`Recorded GST payment of ${formatMoney(summary.netCashPayable)} in ledger.`);

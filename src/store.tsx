@@ -17,8 +17,42 @@ import {
   CompanySettings,
   RecurringBill,
   RecurringBillCadence,
+  LedgerItemMaster,
+  UserRole,
+  WorkspaceUser,
+  RolePermissions,
   TunzuaBackupPayload,
 } from './types';
+
+export const getPermissionsForRole = (role: UserRole): RolePermissions => ({
+  canCreate: true,
+  canEdit: true,
+  canPrint: true,
+  canExport: true,
+  canDelete: role === 'admin',
+  canManageUsers: role === 'admin',
+});
+
+const OWNER_ADMIN_EMAIL = 'jammangguite@gmail.com';
+
+const createInitialWorkspaceUsers = (): WorkspaceUser[] => [
+  {
+    id: 'user-owner-admin',
+    name: 'Workspace Admin',
+    email: OWNER_ADMIN_EMAIL,
+    role: 'admin',
+    status: 'active',
+    addedAt: Date.now() - 86400000 * 30,
+  },
+  {
+    id: 'user-member-1',
+    name: 'Ledger Associate',
+    email: 'associate@tunzua.com',
+    role: 'user',
+    status: 'active',
+    addedAt: Date.now() - 86400000 * 14,
+  },
+];
 
 const DEFAULT_COMPANY_SETTINGS: CompanySettings = {
   name: 'Tunzua',
@@ -108,10 +142,69 @@ const createInitialRecurringBills = (): RecurringBill[] => [
   },
 ];
 
+const createInitialLedgerItems = (): LedgerItemMaster[] => [
+  {
+    id: 'master-item-1',
+    kind: 'item',
+    name: 'IT Advisory & Consulting Services',
+    gstRate: 18,
+    gstMode: 'excluding',
+    discount: 0,
+    discountType: 'percentage',
+    defaultPrice: 1500,
+    hsnOrCode: '998313',
+    accountGroup: 'Revenue Account',
+    createdAt: Date.now() - 86400000 * 10,
+  },
+  {
+    id: 'master-item-2',
+    kind: 'item',
+    name: 'M3 Ultra Laptop Pro 16"',
+    gstRate: 18,
+    gstMode: 'including',
+    discount: 5,
+    discountType: 'percentage',
+    defaultPrice: 2499,
+    hsnOrCode: '847130',
+    accountGroup: 'Inventory Asset Account',
+    createdAt: Date.now() - 86400000 * 7,
+  },
+  {
+    id: 'master-ledger-1',
+    kind: 'ledger',
+    name: 'Sales — Standard GST (18%)',
+    gstRate: 18,
+    gstMode: 'excluding',
+    discount: 0,
+    discountType: 'percentage',
+    accountGroup: 'Revenue Account',
+    createdAt: Date.now() - 86400000 * 5,
+  },
+  {
+    id: 'master-ledger-2',
+    kind: 'ledger',
+    name: 'Office & Packaging Supplies',
+    gstRate: 12,
+    gstMode: 'including',
+    discount: 2,
+    discountType: 'percentage',
+    accountGroup: 'Operating Expense Account',
+    createdAt: Date.now() - 86400000 * 3,
+  },
+];
+
 interface StoreState {
   db: AppDatabase;
   companySettings: CompanySettings;
   recurringBills: RecurringBill[];
+  ledgerItems: LedgerItemMaster[];
+  workspaceUsers: WorkspaceUser[];
+  activeUser: WorkspaceUser;
+  realUser: WorkspaceUser;
+  activeRole: UserRole;
+  isRealAdmin: boolean;
+  isPreviewingRole: boolean;
+  permissions: RolePermissions;
   isOffline: boolean;
   syncStatus: 'synced' | 'syncing' | 'failed' | 'offline';
   latencyMs: number;
@@ -127,11 +220,23 @@ interface StoreState {
   exportBackup: () => TunzuaBackupPayload;
   importBackup: (payload: TunzuaBackupPayload) => { ok: boolean; error?: string };
 
+  // Multi-User & Role Access
+  syncSignedInIdentity: (email: string | null, displayName?: string | null) => void;
+  setActingUserId: (userId: string | null) => void;
+  addWorkspaceUser: (input: { name: string; email: string; role: UserRole; status?: 'active' | 'inactive' }) => Promise<{ ok: boolean; error?: string }>;
+  updateWorkspaceUser: (id: string, updates: Partial<Omit<WorkspaceUser, 'id' | 'addedAt'>>) => Promise<{ ok: boolean; error?: string }>;
+  deleteWorkspaceUser: (id: string) => Promise<{ ok: boolean; error?: string }>;
+
   // Recurring Bills
   addRecurringBill: (bill: Omit<RecurringBill, 'id'>) => void;
   updateRecurringBill: (id: string, updates: Partial<RecurringBill>) => void;
   deleteRecurringBill: (id: string) => void;
   payRecurringBill: (id: string, paymentDate?: string) => void;
+
+  // Item / Ledger Masters (Settings)
+  addLedgerItem: (item: Omit<LedgerItemMaster, 'id' | 'createdAt'>) => { ok: boolean; error?: string };
+  updateLedgerItem: (id: string, updates: Partial<Omit<LedgerItemMaster, 'id' | 'createdAt'>>) => { ok: boolean; error?: string };
+  deleteLedgerItem: (id: string) => void;
 
   // Actions
   addAuditLog: (entry: { action: string; category: AuditLogEntry['category']; description: string; details: any }) => void;
@@ -140,8 +245,9 @@ interface StoreState {
   updateTaskStatus: (id: string, status: Task['status']) => void;
   addInventoryItem: (item: InventoryItem) => void;
   recordInventoryTransaction: (sku: string, type: 'sales' | 'purchase', qty: number, unitPrice: number, partnerName: string) => void;
-  addLedgerTransaction: (tx: Omit<LedgerTransaction, 'createdAt'>) => void;
-  editLedgerTransaction: (id: string, tx: Partial<LedgerTransaction>) => void;
+  addLedgerTransaction: (tx: Omit<LedgerTransaction, 'createdAt'>) => { ok: boolean; error?: string };
+  addBulkLedgerTransactions: (txs: Omit<LedgerTransaction, 'createdAt'>[]) => { insertedCount: number; skippedDuplicates: string[] };
+  editLedgerTransaction: (id: string, tx: Partial<LedgerTransaction>) => { ok: boolean; error?: string };
   deleteLedgerTransaction: (id: string) => void;
   addFixedAsset: (asset: Omit<FixedAsset, 'currentBookValue' | 'accumulatedDepreciation' | 'status'>) => void;
   depreciateAssets: () => void;
@@ -160,8 +266,19 @@ interface StoreState {
   removePasscode: () => void;
   unlockWithPasscode: (code: string) => boolean;
   lockNow: () => void;
+  clearAllData: () => Promise<{ ok: boolean; error?: string }>;
   resetDatabase: () => Promise<void>;
 }
+
+const EMPTY_APP_DB: AppDatabase = {
+  tasks: [],
+  inventory: [],
+  ledger: [],
+  fixedAssets: [],
+  partners: [],
+  payroll: [],
+  bankStatements: [],
+};
 
 const INITIAL_GENESIS_DB: AppDatabase = {
   tasks: [
@@ -426,15 +543,17 @@ export const useStore = () => {
 
 export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Setup database structure in state
-  const [db, setDb] = useState<AppDatabase>({
-    tasks: [],
-    inventory: [],
-    ledger: [],
-    fixedAssets: [],
-    partners: [],
-    payroll: [],
-    bankStatements: [],
-  });
+  const [db, setDb] = useState<AppDatabase>({ ...EMPTY_APP_DB });
+  const dbRef = React.useRef<AppDatabase>(db);
+  const dbInitializedRef = React.useRef<boolean>(false);
+
+  const commitDb = (updater: AppDatabase | ((prev: AppDatabase) => AppDatabase)) => {
+    const next = typeof updater === 'function' ? updater(dbRef.current) : updater;
+    dbRef.current = next;
+    dbInitializedRef.current = true;
+    localStorage.setItem('syncledger_db_cache', JSON.stringify(next));
+    setDb(next);
+  };
 
   const [companySettings, setCompanySettings] = useState<CompanySettings>(() => {
     const saved = localStorage.getItem('tunzua_company_settings');
@@ -461,6 +580,38 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return createInitialRecurringBills();
   });
 
+  const [ledgerItems, setLedgerItems] = useState<LedgerItemMaster[]>(() => {
+    const saved = localStorage.getItem('tunzua_ledger_items');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {
+        return createInitialLedgerItems();
+      }
+    }
+    return createInitialLedgerItems();
+  });
+
+  const [workspaceUsers, setWorkspaceUsers] = useState<WorkspaceUser[]>(() => {
+    const saved = localStorage.getItem('tunzua_workspace_users');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch {
+        return createInitialWorkspaceUsers();
+      }
+    }
+    return createInitialWorkspaceUsers();
+  });
+
+  const [signedInIdentity, setSignedInIdentity] = useState<{ email: string | null; displayName: string | null }>({
+    email: OWNER_ADMIN_EMAIL,
+    displayName: 'Workspace Admin',
+  });
+  const [actingUserId, setActingUserIdState] = useState<string | null>(null);
+
   useEffect(() => {
     localStorage.setItem('tunzua_company_settings', JSON.stringify(companySettings));
   }, [companySettings]);
@@ -468,6 +619,86 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     localStorage.setItem('tunzua_recurring_bills', JSON.stringify(recurringBills));
   }, [recurringBills]);
+
+  useEffect(() => {
+    localStorage.setItem('tunzua_ledger_items', JSON.stringify(ledgerItems));
+  }, [ledgerItems]);
+
+  useEffect(() => {
+    localStorage.setItem('tunzua_workspace_users', JSON.stringify(workspaceUsers));
+  }, [workspaceUsers]);
+
+  // Resolve real signed-in user against the workspace directory (least-privilege fallback to 'user')
+  const realUser: WorkspaceUser = React.useMemo(() => {
+    const emailNorm = (signedInIdentity.email || '').trim().toLowerCase();
+    if (emailNorm) {
+      const matched = workspaceUsers.find(
+        u => u.email.trim().toLowerCase() === emailNorm && u.status === 'active'
+      );
+      if (matched) return matched;
+      if (emailNorm === OWNER_ADMIN_EMAIL) {
+        return {
+          id: 'user-owner-admin',
+          name: signedInIdentity.displayName || 'Workspace Admin',
+          email: OWNER_ADMIN_EMAIL,
+          role: 'admin',
+          status: 'active',
+          addedAt: Date.now(),
+        };
+      }
+      return {
+        id: `session-${emailNorm}`,
+        name: signedInIdentity.displayName || emailNorm.split('@')[0],
+        email: emailNorm,
+        role: 'user',
+        status: 'active',
+        addedAt: Date.now(),
+      };
+    }
+    return (
+      workspaceUsers.find(u => u.role === 'admin' && u.status === 'active') ||
+      createInitialWorkspaceUsers()[0]
+    );
+  }, [signedInIdentity, workspaceUsers]);
+
+  const isRealAdmin = realUser.role === 'admin' && realUser.status === 'active';
+
+  // Only a real Admin can switch/preview another member's active role
+  const activeUser: WorkspaceUser = React.useMemo(() => {
+    if (isRealAdmin && actingUserId) {
+      const target = workspaceUsers.find(u => u.id === actingUserId && u.status === 'active');
+      if (target) return target;
+    }
+    return realUser;
+  }, [isRealAdmin, actingUserId, workspaceUsers, realUser]);
+
+  const activeRole: UserRole = activeUser.role;
+  const isPreviewingRole = isRealAdmin && activeUser.id !== realUser.id;
+  const permissions: RolePermissions = React.useMemo(
+    () => getPermissionsForRole(activeRole),
+    [activeRole]
+  );
+
+  const syncSignedInIdentity = (email: string | null, displayName?: string | null) => {
+    setSignedInIdentity(prev => {
+      const nextEmail = email ? email.trim().toLowerCase() : null;
+      const nextName = displayName || null;
+      if (prev.email === nextEmail && prev.displayName === nextName) return prev;
+      return { email: nextEmail, displayName: nextName };
+    });
+  };
+
+  const setActingUserId = (userId: string | null) => {
+    if (!isRealAdmin) return;
+    if (!userId || userId === realUser.id) {
+      setActingUserIdState(null);
+      return;
+    }
+    const target = workspaceUsers.find(u => u.id === userId && u.status === 'active');
+    if (target) {
+      setActingUserIdState(target.id);
+    }
+  };
 
   const formatMoney = (amount: number): string => {
     const sign = amount < 0 ? '-' : '';
@@ -570,7 +801,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       category: entry.category,
       description: entry.description,
       details: typeof entry.details === 'string' ? entry.details : JSON.stringify(entry.details),
-      user: "jammangguite@gmail.com"
+      user: activeUser?.email || OWNER_ADMIN_EMAIL,
     };
     setAuditLogs(prev => {
       const next = [newEntry, ...prev];
@@ -580,6 +811,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const clearAuditLogs = () => {
+    if (!permissions.canDelete) return;
     const fresh: AuditLogEntry[] = [];
     localStorage.setItem('syncledger_audit_logs', JSON.stringify(fresh));
     setAuditLogs(fresh);
@@ -606,7 +838,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const cachedDb = localStorage.getItem('syncledger_db_cache');
     if (cachedDb) {
       try {
-        setDb(JSON.parse(cachedDb));
+        const parsedCache = JSON.parse(cachedDb);
+        dbRef.current = parsedCache;
+        dbInitializedRef.current = true;
+        setDb(parsedCache);
       } catch (e) {
         console.error("Local database cache corruption, fetching fresh snapshot.");
       }
@@ -626,6 +861,16 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     // Initial pull
     pullFromServer();
+    fetch('/api/users')
+      .then(r => r.json())
+      .then(data => {
+        if (data?.success && Array.isArray(data.users) && data.users.length > 0) {
+          setWorkspaceUsers(data.users);
+        }
+      })
+      .catch(() => {
+        // Offline or local-only fallback uses localStorage cache
+      });
 
     return () => {
       window.removeEventListener('online', handleOnline);
@@ -633,9 +878,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, []);
 
-  // Sync to database caches whenever db state updates
+  // Sync to database caches whenever db state updates (including empty cleared state)
   useEffect(() => {
-    if (db.tasks.length > 0 || db.inventory.length > 0 || db.ledger.length > 0) {
+    dbRef.current = db;
+    if (dbInitializedRef.current) {
       localStorage.setItem('syncledger_db_cache', JSON.stringify(db));
     }
   }, [db]);
@@ -668,7 +914,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const end = performance.now();
       
       if (data.success && data.db) {
+        dbRef.current = data.db;
+        dbInitializedRef.current = true;
         setDb(data.db);
+        localStorage.setItem('syncledger_db_cache', JSON.stringify(data.db));
         setSyncStatus('synced');
         setLatencyMs(parseFloat((end - start).toFixed(2)));
       } else {
@@ -690,14 +939,20 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const start = performance.now();
       const response = await fetch('/api/sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(db),
+        headers: {
+          'Content-Type': 'application/json',
+          'x-tunzua-actor-email': realUser.email,
+        },
+        body: JSON.stringify(dbRef.current),
       });
       const data = await response.json();
       const end = performance.now();
 
       if (data.success && data.db) {
+        dbRef.current = data.db;
+        dbInitializedRef.current = true;
         setDb(data.db);
+        localStorage.setItem('syncledger_db_cache', JSON.stringify(data.db));
         setSyncStatus('synced');
         const finalLatency = parseFloat((end - start).toFixed(2));
         setLatencyMs(finalLatency);
@@ -706,7 +961,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         addAuditLog({
           action: 'sync_completed',
           category: 'synchronization',
-          description: `Telemetry records synchronized with external server`,
+          description: `Records synchronized with server`,
           details: { latencyMs: finalLatency },
         });
       } else {
@@ -719,21 +974,96 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
+  const clearAllData = async (): Promise<{ ok: boolean; error?: string }> => {
+    if (!permissions.canDelete) {
+      addAuditLog({
+        action: 'permission_denied',
+        category: 'security',
+        description: `Blocked clear-all-data attempt by non-admin user (${activeUser.email})`,
+        details: { role: activeRole },
+      });
+      return { ok: false, error: 'Only Admins can clear all workspace data.' };
+    }
+
+    const blankDb: AppDatabase = JSON.parse(JSON.stringify(EMPTY_APP_DB));
+    dbRef.current = blankDb;
+    dbInitializedRef.current = true;
+    setDb(blankDb);
+    setRecurringBills([]);
+    setLedgerItems([]);
+    localStorage.setItem('syncledger_db_cache', JSON.stringify(blankDb));
+    localStorage.setItem('tunzua_recurring_bills', JSON.stringify([]));
+    localStorage.setItem('tunzua_ledger_items', JSON.stringify([]));
+    localStorage.setItem('tunzua_sundry_parties', JSON.stringify([]));
+
+    addAuditLog({
+      action: 'workspace_cleared',
+      category: 'user_modification',
+      description: 'Cleared all demo and ledger data to start with a blank workspace',
+      details: { status: 'success' },
+    });
+
+    if (isOffline) {
+      setSyncStatus('offline');
+      return { ok: true };
+    }
+
+    try {
+      setSyncStatus('syncing');
+      const res = await fetch('/api/clear', {
+        method: 'POST',
+        headers: {
+          'x-tunzua-actor-email': realUser.email,
+        },
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setSyncStatus('failed');
+        return { ok: false, error: data?.error || 'Server could not clear workspace data.' };
+      }
+      dbRef.current = data.db;
+      setDb(data.db);
+      localStorage.setItem('syncledger_db_cache', JSON.stringify(data.db));
+      setSyncStatus('synced');
+      return { ok: true };
+    } catch (err) {
+      console.error('Server clear failed', err);
+      setSyncStatus('failed');
+      return { ok: true };
+    }
+  };
+
   const resetDatabase = async () => {
+    if (!permissions.canDelete) {
+      addAuditLog({
+        action: 'permission_denied',
+        category: 'security',
+        description: `Blocked workspace reset attempt by non-admin user (${activeUser.email})`,
+        details: { role: activeRole },
+      });
+      return;
+    }
+
     // 1. Instantly perform client-side hard-reset to avoid sync / race conditions
     const cleanGenesis = JSON.parse(JSON.stringify(INITIAL_GENESIS_DB));
     const freshBills = createInitialRecurringBills();
+    const freshItems = createInitialLedgerItems();
+    dbRef.current = cleanGenesis;
+    dbInitializedRef.current = true;
     setDb(cleanGenesis);
     setRecurringBills(freshBills);
+    setLedgerItems(freshItems);
     setCompanySettings(DEFAULT_COMPANY_SETTINGS);
     localStorage.setItem('syncledger_db_cache', JSON.stringify(cleanGenesis));
     localStorage.setItem('tunzua_recurring_bills', JSON.stringify(freshBills));
+    localStorage.setItem('tunzua_ledger_items', JSON.stringify(freshItems));
     localStorage.setItem('tunzua_company_settings', JSON.stringify(DEFAULT_COMPANY_SETTINGS));
+    localStorage.removeItem('tunzua_sundry_parties');
     
     addAuditLog({
       action: 'database_reset',
       category: 'user_modification',
-      description: 'Workspace reset to clean initial ledger data',
+      description: 'Workspace restored to clean initial sample ledger data',
       details: { status: 'success' },
     });
 
@@ -744,9 +1074,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     try {
       setSyncStatus('syncing');
-      const res = await fetch('/api/reset', { method: 'POST' });
+      const res = await fetch('/api/reset', {
+        method: 'POST',
+        headers: {
+          'x-tunzua-actor-email': realUser.email,
+        },
+      });
       const data = await res.json();
       if (data.success && data.db) {
+        dbRef.current = data.db;
         setDb(data.db);
         localStorage.setItem('syncledger_db_cache', JSON.stringify(data.db));
         setSyncStatus('synced');
@@ -757,6 +1093,197 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       console.error("Server reset failed", err);
       setSyncStatus('failed');
     }
+  };
+
+  // Multi-User Directory Actions (Admin-only)
+  const addWorkspaceUser = async (input: {
+    name: string;
+    email: string;
+    role: UserRole;
+    status?: 'active' | 'inactive';
+  }): Promise<{ ok: boolean; error?: string }> => {
+    if (!isRealAdmin) {
+      return { ok: false, error: 'Only Admins can add workspace users.' };
+    }
+    const cleanName = input.name.trim();
+    const cleanEmail = input.email.trim().toLowerCase();
+    if (!cleanName) return { ok: false, error: 'Please enter a full name.' };
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return { ok: false, error: 'Please enter a valid email address.' };
+    }
+    if (workspaceUsers.some(u => u.email.trim().toLowerCase() === cleanEmail)) {
+      return { ok: false, error: 'A user with this email already exists.' };
+    }
+
+    const newUser: WorkspaceUser = {
+      id: `user-${Date.now()}`,
+      name: cleanName,
+      email: cleanEmail,
+      role: input.role === 'admin' ? 'admin' : 'user',
+      status: input.status === 'inactive' ? 'inactive' : 'active',
+      addedAt: Date.now(),
+    };
+
+    try {
+      if (!isOffline) {
+        const res = await fetch('/api/users', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-tunzua-actor-email': realUser.email,
+          },
+          body: JSON.stringify(newUser),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          return { ok: false, error: data?.error || 'Could not add user.' };
+        }
+        if (Array.isArray(data.users)) {
+          setWorkspaceUsers(data.users);
+        } else {
+          setWorkspaceUsers(prev => [newUser, ...prev]);
+        }
+      } else {
+        setWorkspaceUsers(prev => [newUser, ...prev]);
+      }
+    } catch {
+      setWorkspaceUsers(prev => [newUser, ...prev]);
+    }
+
+    addAuditLog({
+      action: 'workspace_user_added',
+      category: 'security',
+      description: `Added ${newUser.role} user: ${newUser.name} (${newUser.email})`,
+      details: newUser,
+    });
+    return { ok: true };
+  };
+
+  const updateWorkspaceUser = async (
+    id: string,
+    updates: Partial<Omit<WorkspaceUser, 'id' | 'addedAt'>>
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!isRealAdmin) {
+      return { ok: false, error: 'Only Admins can update user roles.' };
+    }
+    const target = workspaceUsers.find(u => u.id === id);
+    if (!target) return { ok: false, error: 'User not found.' };
+
+    const nextRole = updates.role || target.role;
+    const nextStatus = updates.status || target.status;
+    const activeAdmins = workspaceUsers.filter(u => u.role === 'admin' && u.status === 'active');
+
+    if (
+      target.role === 'admin' &&
+      target.status === 'active' &&
+      activeAdmins.length <= 1 &&
+      (nextRole !== 'admin' || nextStatus !== 'active')
+    ) {
+      return { ok: false, error: 'At least one active Admin must remain in the workspace.' };
+    }
+
+    const cleanEmail = updates.email ? updates.email.trim().toLowerCase() : target.email;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return { ok: false, error: 'Please enter a valid email address.' };
+    }
+    if (workspaceUsers.some(u => u.id !== id && u.email.trim().toLowerCase() === cleanEmail)) {
+      return { ok: false, error: 'Email is already assigned to another user.' };
+    }
+
+    const merged: WorkspaceUser = {
+      ...target,
+      name: updates.name?.trim() || target.name,
+      email: cleanEmail,
+      role: nextRole,
+      status: nextStatus,
+    };
+
+    try {
+      if (!isOffline) {
+        const res = await fetch(`/api/users/${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-tunzua-actor-email': realUser.email,
+          },
+          body: JSON.stringify(merged),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          return { ok: false, error: data?.error || 'Could not update user.' };
+        }
+        if (Array.isArray(data.users)) {
+          setWorkspaceUsers(data.users);
+        } else {
+          setWorkspaceUsers(prev => prev.map(u => (u.id === id ? merged : u)));
+        }
+      } else {
+        setWorkspaceUsers(prev => prev.map(u => (u.id === id ? merged : u)));
+      }
+    } catch {
+      setWorkspaceUsers(prev => prev.map(u => (u.id === id ? merged : u)));
+    }
+
+    if (actingUserId === id && merged.status !== 'active') {
+      setActingUserIdState(null);
+    }
+
+    addAuditLog({
+      action: 'workspace_user_updated',
+      category: 'security',
+      description: `Updated user ${merged.email} (Role: ${merged.role}, Status: ${merged.status})`,
+      details: merged,
+    });
+    return { ok: true };
+  };
+
+  const deleteWorkspaceUser = async (id: string): Promise<{ ok: boolean; error?: string }> => {
+    if (!isRealAdmin) {
+      return { ok: false, error: 'Only Admins can delete workspace users.' };
+    }
+    const target = workspaceUsers.find(u => u.id === id);
+    if (!target) return { ok: false, error: 'User not found.' };
+
+    const activeAdmins = workspaceUsers.filter(u => u.role === 'admin' && u.status === 'active');
+    if (target.role === 'admin' && target.status === 'active' && activeAdmins.length <= 1) {
+      return { ok: false, error: 'Cannot remove the last active Admin account.' };
+    }
+
+    try {
+      if (!isOffline) {
+        const res = await fetch(`/api/users/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          headers: {
+            'x-tunzua-actor-email': realUser.email,
+          },
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          return { ok: false, error: data?.error || 'Could not remove user.' };
+        }
+        if (Array.isArray(data.users)) {
+          setWorkspaceUsers(data.users);
+        } else {
+          setWorkspaceUsers(prev => prev.filter(u => u.id !== id));
+        }
+      } else {
+        setWorkspaceUsers(prev => prev.filter(u => u.id !== id));
+      }
+    } catch {
+      setWorkspaceUsers(prev => prev.filter(u => u.id !== id));
+    }
+
+    if (actingUserId === id) {
+      setActingUserIdState(null);
+    }
+
+    addAuditLog({
+      action: 'workspace_user_removed',
+      category: 'security',
+      description: `Removed workspace user ${target.email}`,
+      details: { id, email: target.email },
+    });
+    return { ok: true };
   };
 
   // Recurring Bills Actions
@@ -779,6 +1306,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const deleteRecurringBill = (id: string) => {
+    if (!permissions.canDelete) {
+      addAuditLog({
+        action: 'permission_denied',
+        category: 'security',
+        description: `Blocked recurring bill deletion by ${activeUser.email}`,
+        details: { id, role: activeRole },
+      });
+      return;
+    }
     setRecurringBills(prev => prev.filter(b => b.id !== id));
     addAuditLog({
       action: 'recurring_bill_deleted',
@@ -794,6 +1330,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const paidOn = paymentDate || new Date().toISOString().split('T')[0];
     const nextDue = advanceDueDate(target.nextDueDate, target.cadence);
 
+    const baseBillRef = `BILL-${target.id.slice(-4).toUpperCase()}-${paidOn.replace(/-/g, '')}`;
+    const existingRefs = new Set(
+      dbRef.current.ledger
+        .map(t => (t.reference || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+    let billRef = baseBillRef;
+    let suffix = 2;
+    while (existingRefs.has(billRef.toLowerCase())) {
+      billRef = `${baseBillRef}-${suffix}`;
+      suffix++;
+    }
+
     const newTx: LedgerTransaction = {
       id: `billpay-${Date.now()}`,
       date: paidOn,
@@ -802,12 +1351,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       debitAccount: target.expenseAccount,
       creditAccount: target.paymentAccount,
       amount: target.amount,
-      reference: `BILL-${target.id.slice(-4).toUpperCase()}`,
+      reference: billRef,
       isBankCleared: true,
       createdAt: Date.now(),
     };
 
-    setDb(prev => ({
+    commitDb(prev => ({
       ...prev,
       ledger: [newTx, ...prev.ledger],
     }));
@@ -828,12 +1377,104 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
   };
 
+  const normalizeTextKey = (value: string): string =>
+    value.trim().replace(/\s+/g, ' ').toLowerCase();
+
+  // Item / Ledger Master CRUD (Settings)
+  const addLedgerItem = (
+    itemInput: Omit<LedgerItemMaster, 'id' | 'createdAt'>
+  ): { ok: boolean; error?: string } => {
+    const cleanName = itemInput.name.trim().replace(/\s+/g, ' ');
+    if (!cleanName) {
+      return { ok: false, error: `Please enter ${itemInput.kind === 'item' ? 'an item' : 'a ledger'} name.` };
+    }
+    const candidateKey = normalizeTextKey(cleanName);
+    const duplicate = ledgerItems.find(existing => normalizeTextKey(existing.name) === candidateKey);
+    if (duplicate) {
+      const label = duplicate.kind === 'item' ? 'item' : 'ledger';
+      return {
+        ok: false,
+        error: `A ${label} named "${duplicate.name}" already exists. Duplicate item or ledger names are not allowed.`,
+      };
+    }
+
+    const newItem: LedgerItemMaster = {
+      ...itemInput,
+      name: cleanName,
+      id: `master-${itemInput.kind}-${Date.now()}`,
+      createdAt: Date.now(),
+    };
+    setLedgerItems(prev => [newItem, ...prev]);
+    addAuditLog({
+      action: 'ledger_item_created',
+      category: 'user_modification',
+      description: `Created ${newItem.kind}: ${newItem.name} (GST ${newItem.gstRate}% ${newItem.gstMode})`,
+      details: newItem,
+    });
+    return { ok: true };
+  };
+
+  const updateLedgerItem = (
+    id: string,
+    updates: Partial<Omit<LedgerItemMaster, 'id' | 'createdAt'>>
+  ): { ok: boolean; error?: string } => {
+    const nextUpdates = { ...updates };
+    if (typeof updates.name === 'string') {
+      const cleanName = updates.name.trim().replace(/\s+/g, ' ');
+      if (!cleanName) {
+        return { ok: false, error: 'Name cannot be empty.' };
+      }
+      const candidateKey = normalizeTextKey(cleanName);
+      const duplicate = ledgerItems.find(
+        existing => existing.id !== id && normalizeTextKey(existing.name) === candidateKey
+      );
+      if (duplicate) {
+        const label = duplicate.kind === 'item' ? 'item' : 'ledger';
+        return {
+          ok: false,
+          error: `A ${label} named "${duplicate.name}" already exists. Duplicate item or ledger names are not allowed.`,
+        };
+      }
+      nextUpdates.name = cleanName;
+    }
+
+    setLedgerItems(prev => prev.map(item => (item.id === id ? { ...item, ...nextUpdates } : item)));
+    addAuditLog({
+      action: 'ledger_item_updated',
+      category: 'user_modification',
+      description: `Updated item/ledger master ${nextUpdates.name || id}`,
+      details: { id, updates: nextUpdates },
+    });
+    return { ok: true };
+  };
+
+  const deleteLedgerItem = (id: string) => {
+    if (!permissions.canDelete) {
+      addAuditLog({
+        action: 'permission_denied',
+        category: 'security',
+        description: `Blocked item/ledger master deletion by ${activeUser.email}`,
+        details: { id, role: activeRole },
+      });
+      return;
+    }
+    setLedgerItems(prev => prev.filter(item => item.id !== id));
+    addAuditLog({
+      action: 'ledger_item_deleted',
+      category: 'user_modification',
+      description: `Deleted item/ledger master ${id}`,
+      details: { id },
+    });
+  };
+
   // JSON Backup Export & Restore
   const exportBackup = (): TunzuaBackupPayload => ({
-    version: '1.0',
+    version: '1.2',
     exportedAt: new Date().toISOString(),
     companySettings,
     recurringBills,
+    ledgerItems,
+    workspaceUsers,
     db,
   });
 
@@ -862,6 +1503,16 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (Array.isArray(payload.recurringBills)) {
       setRecurringBills(payload.recurringBills);
       localStorage.setItem('tunzua_recurring_bills', JSON.stringify(payload.recurringBills));
+    }
+
+    if (Array.isArray(payload.ledgerItems)) {
+      setLedgerItems(payload.ledgerItems);
+      localStorage.setItem('tunzua_ledger_items', JSON.stringify(payload.ledgerItems));
+    }
+
+    if (isRealAdmin && Array.isArray(payload.workspaceUsers) && payload.workspaceUsers.length > 0) {
+      setWorkspaceUsers(payload.workspaceUsers);
+      localStorage.setItem('tunzua_workspace_users', JSON.stringify(payload.workspaceUsers));
     }
 
     addAuditLog({
@@ -1019,13 +1670,33 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   // 3. LEDGER & GENERAL REPORTING
-  const addLedgerTransaction = (txInput: Omit<LedgerTransaction, 'createdAt'>) => {
+  const findDuplicateReference = (reference: string | undefined, excludeTxId?: string): LedgerTransaction | undefined => {
+    const cleanRef = (reference || '').trim().toLowerCase();
+    if (!cleanRef) return undefined;
+    return dbRef.current.ledger.find(
+      tx => tx.id !== excludeTxId && (tx.reference || '').trim().toLowerCase() === cleanRef
+    );
+  };
+
+  const addLedgerTransaction = (txInput: Omit<LedgerTransaction, 'createdAt'>): { ok: boolean; error?: string } => {
+    const cleanRef = txInput.reference?.trim();
+    if (cleanRef) {
+      const duplicate = findDuplicateReference(cleanRef);
+      if (duplicate) {
+        return {
+          ok: false,
+          error: `Invoice / reference number "${cleanRef}" already exists. Duplicate invoice numbers are not allowed.`,
+        };
+      }
+    }
+
     measureLatency(() => {
       const newTx: LedgerTransaction = {
         ...txInput,
+        reference: cleanRef || undefined,
         createdAt: Date.now(),
       };
-      setDb(prev => ({
+      commitDb(prev => ({
         ...prev,
         ledger: [newTx, ...prev.ledger],
       }));
@@ -1036,45 +1707,122 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         details: { id: newTx.id, amount: newTx.amount, debitAccount: newTx.debitAccount, creditAccount: newTx.creditAccount },
       });
     });
+    return { ok: true };
   };
 
-  const editLedgerTransaction = (id: string, updatedFields: Partial<LedgerTransaction>) => {
-    measureLatency(() => {
-      setDb(prev => {
-        const original = prev.ledger.find(tx => tx.id === id);
-        if (original) {
-          addAuditLog({
-            action: 'ledger_updated',
-            category: 'transaction',
-            description: `Updated ledger voucher ref ${original.reference || original.id.slice(-5)}: "${original.description}"`,
-            details: { id, original: { amount: original.amount, description: original.description }, updated: updatedFields },
-          });
-        }
-        return {
-          ...prev,
-          ledger: prev.ledger.map(tx => tx.id === id ? { ...tx, ...updatedFields } : tx),
-        };
+  const addBulkLedgerTransactions = (
+    txInputs: Omit<LedgerTransaction, 'createdAt'>[]
+  ): { insertedCount: number; skippedDuplicates: string[] } => {
+    if (!txInputs.length) return { insertedCount: 0, skippedDuplicates: [] };
+
+    const seenRefs = new Set(
+      dbRef.current.ledger
+        .map(tx => (tx.reference || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+    const skippedDuplicates: string[] = [];
+    const baseTime = Date.now();
+    const newTxs: LedgerTransaction[] = [];
+
+    txInputs.forEach((txInput, idx) => {
+      const cleanRef = txInput.reference?.trim();
+      const refKey = cleanRef ? cleanRef.toLowerCase() : '';
+      if (refKey && seenRefs.has(refKey)) {
+        skippedDuplicates.push(cleanRef!);
+        return;
+      }
+      if (refKey) seenRefs.add(refKey);
+      newTxs.push({
+        ...txInput,
+        reference: cleanRef || undefined,
+        createdAt: baseTime + idx,
       });
     });
+
+    if (newTxs.length === 0) {
+      return { insertedCount: 0, skippedDuplicates };
+    }
+
+    measureLatency(() => {
+      commitDb(prev => ({
+        ...prev,
+        ledger: [...newTxs, ...prev.ledger],
+      }));
+      const totalAmount = newTxs.reduce((sum, tx) => sum + tx.amount, 0);
+      addAuditLog({
+        action: 'ledger_bulk_imported',
+        category: 'transaction',
+        description: `Imported ${newTxs.length} ledger transactions via CSV`,
+        details: { count: newTxs.length, totalAmount, skippedDuplicatesCount: skippedDuplicates.length },
+      });
+    });
+
+    return { insertedCount: newTxs.length, skippedDuplicates };
+  };
+
+  const editLedgerTransaction = (
+    id: string,
+    updatedFields: Partial<LedgerTransaction>
+  ): { ok: boolean; error?: string } => {
+    const cleanRef =
+      typeof updatedFields.reference === 'string' ? updatedFields.reference.trim() : undefined;
+    if (cleanRef) {
+      const duplicate = findDuplicateReference(cleanRef, id);
+      if (duplicate) {
+        return {
+          ok: false,
+          error: `Invoice / reference number "${cleanRef}" already exists. Duplicate invoice numbers are not allowed.`,
+        };
+      }
+    }
+
+    const sanitizedUpdates: Partial<LedgerTransaction> =
+      'reference' in updatedFields
+        ? { ...updatedFields, reference: cleanRef || undefined }
+        : updatedFields;
+
+    measureLatency(() => {
+      const original = dbRef.current.ledger.find(tx => tx.id === id);
+      if (original) {
+        addAuditLog({
+          action: 'ledger_updated',
+          category: 'transaction',
+          description: `Updated ledger voucher ref ${original.reference || original.id.slice(-5)}: "${original.description}"`,
+          details: { id, original: { amount: original.amount, description: original.description }, updated: sanitizedUpdates },
+        });
+      }
+      commitDb(prev => ({
+        ...prev,
+        ledger: prev.ledger.map(tx => tx.id === id ? { ...tx, ...sanitizedUpdates } : tx),
+      }));
+    });
+    return { ok: true };
   };
 
   const deleteLedgerTransaction = (id: string) => {
-    measureLatency(() => {
-      setDb(prev => {
-        const original = prev.ledger.find(tx => tx.id === id);
-        if (original) {
-          addAuditLog({
-            action: 'ledger_deleted',
-            category: 'transaction',
-            description: `Removed ledger voucher ref ${original.reference || original.id.slice(-5)}: "${original.description}"`,
-            details: original,
-          });
-        }
-        return {
-          ...prev,
-          ledger: prev.ledger.filter(tx => tx.id !== id),
-        };
+    if (!permissions.canDelete) {
+      addAuditLog({
+        action: 'permission_denied',
+        category: 'security',
+        description: `Blocked ledger entry deletion by ${activeUser.email}`,
+        details: { id, role: activeRole },
       });
+      return;
+    }
+    measureLatency(() => {
+      const original = dbRef.current.ledger.find(tx => tx.id === id);
+      if (original) {
+        addAuditLog({
+          action: 'ledger_deleted',
+          category: 'transaction',
+          description: `Removed ledger voucher ref ${original.reference || original.id.slice(-5)}: "${original.description}"`,
+          details: original,
+        });
+      }
+      commitDb(prev => ({
+        ...prev,
+        ledger: prev.ledger.filter(tx => tx.id !== id),
+      }));
     });
   };
 
@@ -1371,6 +2119,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const deleteEmployee = (id: string) => {
+    if (!permissions.canDelete) {
+      addAuditLog({
+        action: 'permission_denied',
+        category: 'security',
+        description: `Blocked payroll record deletion by ${activeUser.email}`,
+        details: { id, role: activeRole },
+      });
+      return;
+    }
     measureLatency(() => {
       setDb(prev => ({
         ...prev,
@@ -1541,6 +2298,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         db,
         companySettings,
         recurringBills,
+        ledgerItems,
+        workspaceUsers,
+        activeUser,
+        realUser,
+        activeRole,
+        isRealAdmin,
+        isPreviewingRole,
+        permissions,
         isOffline,
         syncStatus,
         latencyMs,
@@ -1553,10 +2318,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         updateCompanySettings,
         exportBackup,
         importBackup,
+        syncSignedInIdentity,
+        setActingUserId,
+        addWorkspaceUser,
+        updateWorkspaceUser,
+        deleteWorkspaceUser,
         addRecurringBill,
         updateRecurringBill,
         deleteRecurringBill,
         payRecurringBill,
+        addLedgerItem,
+        updateLedgerItem,
+        deleteLedgerItem,
         addAuditLog,
         clearAuditLogs,
         addTask,
@@ -1564,6 +2337,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         addInventoryItem,
         recordInventoryTransaction,
         addLedgerTransaction,
+        addBulkLedgerTransactions,
         editLedgerTransaction,
         deleteLedgerTransaction,
         addFixedAsset,
@@ -1583,6 +2357,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         removePasscode,
         unlockWithPasscode,
         lockNow,
+        clearAllData,
         resetDatabase,
       }}
     >

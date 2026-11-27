@@ -4,10 +4,11 @@ import { useAuth } from '../lib/auth';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Logo } from '../components/Logo';
+import { PWAInstallButton } from '../components/PWAInstallButton';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
-  const { loginWithGoogle, user } = useAuth();
+  const { loginWithGoogle, loginWithEmail, user } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -38,11 +39,10 @@ const Login: React.FC = () => {
       return;
     }
     setLoading(true);
-    setTimeout(() => {
-      toast.success(`Welcome back, ${email}`);
-      navigate('/app', { replace: true });
-      setLoading(false);
-    }, 500);
+    loginWithEmail(email);
+    toast.success(`Welcome back, ${email}`);
+    navigate('/app', { replace: true });
+    setLoading(false);
   };
 
   return (
@@ -131,6 +131,8 @@ const Login: React.FC = () => {
               Create an account
             </Link>
           </p>
+
+          <PWAInstallButton variant="login" />
         </div>
       </div>
     </div>

@@ -1,18 +1,37 @@
 import React, { useState, useMemo } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { useStore } from '../store';
+import { LedgerTransaction } from '../types';
 import { DateSearchBar } from '../components/DateSearchBar';
 import { ClickablePath } from '../components/ClickablePath';
-import { Plus, Trash2, X } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Printer } from 'lucide-react';
 import { toast } from 'sonner';
 
+const BASE_CONTRA_ACCOUNTS = [
+  'Petty Cash Drawer',
+  'Corporate Bank Account',
+  'Savings Account',
+];
+
 const Contra: React.FC = () => {
-  const { db, addLedgerTransaction, deleteLedgerTransaction, triggerSync, formatMoney, companySettings } = useStore();
+  const {
+    db,
+    addLedgerTransaction,
+    editLedgerTransaction,
+    deleteLedgerTransaction,
+    permissions,
+    triggerSync,
+    formatMoney,
+    companySettings,
+  } = useStore();
+  const outletCtx = useOutletContext<{ openPrintPreview?: () => void }>() || {};
 
   const [searchQuery, setSearchQuery] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const [date, setDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [reference, setReference] = useState(() => `CON-${Date.now().toString().slice(-4)}`);
@@ -49,6 +68,47 @@ const Contra: React.FC = () => {
 
   const totalContra = contraTransactions.reduce((sum, tx) => sum + tx.amount, 0);
 
+  const accountOptions = useMemo(() => {
+    const set = new Set(BASE_CONTRA_ACCOUNTS);
+    if (fromAccount) set.add(fromAccount);
+    if (toAccount) set.add(toAccount);
+    return Array.from(set);
+  }, [fromAccount, toAccount]);
+
+  const duplicateRef = useMemo(() => {
+    const refKey = reference.trim().toLowerCase();
+    if (!refKey) return null;
+    return (
+      db.ledger.find(
+        tx =>
+          tx.id !== editingId &&
+          (tx.reference || '').trim().toLowerCase() === refKey
+      ) || null
+    );
+  }, [db.ledger, reference, editingId]);
+
+  const openNewModal = () => {
+    setEditingId(null);
+    setDate(new Date().toISOString().split('T')[0]);
+    setReference(`CON-${Date.now().toString().slice(-4)}`);
+    setDescription('');
+    setAmount('');
+    setFromAccount('Petty Cash Drawer');
+    setToAccount('Corporate Bank Account');
+    setShowAddModal(true);
+  };
+
+  const openEditModal = (tx: LedgerTransaction) => {
+    setEditingId(tx.id);
+    setDate(tx.date);
+    setReference(tx.reference || `CON-${Date.now().toString().slice(-4)}`);
+    setDescription(tx.description);
+    setAmount(String(tx.amount));
+    setFromAccount(tx.creditAccount);
+    setToAccount(tx.debitAccount);
+    setShowAddModal(true);
+  };
+
   const handleCreateContra = (e: React.FormEvent) => {
     e.preventDefault();
     if (!description.trim() || !amount || !fromAccount || !toAccount) {
@@ -65,19 +125,35 @@ const Contra: React.FC = () => {
       return;
     }
 
-    addLedgerTransaction({
-      id: `contra-${Date.now()}`,
-      date,
-      description: description.trim(),
-      type: 'other_expense',
-      debitAccount: toAccount,
-      creditAccount: fromAccount,
-      amount: parsedAmount,
-      reference: reference.trim() || `CON-${Date.now().toString().slice(-4)}`,
-      isBankCleared: true,
-    });
+    const res = editingId
+      ? editLedgerTransaction(editingId, {
+          date,
+          description: description.trim(),
+          debitAccount: toAccount,
+          creditAccount: fromAccount,
+          amount: parsedAmount,
+          reference: reference.trim() || `CON-${Date.now().toString().slice(-4)}`,
+        })
+      : addLedgerTransaction({
+          id: `contra-${Date.now()}`,
+          date,
+          description: description.trim(),
+          type: 'other_expense',
+          debitAccount: toAccount,
+          creditAccount: fromAccount,
+          amount: parsedAmount,
+          reference: reference.trim() || `CON-${Date.now().toString().slice(-4)}`,
+          isBankCleared: true,
+        });
+
+    if (!res.ok) {
+      toast.error(res.error || 'Duplicate reference number is not allowed.');
+      return;
+    }
+
     triggerSync();
-    toast.success('Contra transfer recorded.');
+    toast.success(editingId ? 'Contra transfer updated.' : 'Contra transfer recorded.');
+    setEditingId(null);
     setShowAddModal(false);
     setDescription('');
     setAmount('');
@@ -97,14 +173,25 @@ const Contra: React.FC = () => {
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setShowAddModal(true)}
-          className="px-4 py-2 bg-[#1B4D3E] hover:bg-[#143B2F] text-[#FFFDF9] font-semibold text-xs rounded-lg flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap shrink-0 self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4" />
-          New Contra
-        </button>
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto no-print">
+          <button
+            type="button"
+            onClick={() => (outletCtx.openPrintPreview ? outletCtx.openPrintPreview() : window.print())}
+            className="px-3.5 py-2 bg-[#FFFDF9] hover:bg-[#F2EFE9] text-[#1F1D1A] border border-[#E5E0D5] font-medium text-xs rounded-lg flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap shrink-0"
+          >
+            <Printer className="w-3.5 h-3.5 text-[#1B4D3E]" />
+            Print Preview
+          </button>
+
+          <button
+            type="button"
+            onClick={openNewModal}
+            className="px-4 py-2 bg-[#1B4D3E] hover:bg-[#143B2F] text-[#FFFDF9] font-semibold text-xs rounded-lg flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap shrink-0"
+          >
+            <Plus className="w-4 h-4" />
+            New Contra
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -162,7 +249,7 @@ const Contra: React.FC = () => {
                     {formatMoney(tx.amount)}
                   </td>
                   <td className="py-3.5 px-4 text-right whitespace-nowrap no-print">
-                    {confirmDeleteId === tx.id ? (
+                    {permissions.canDelete && confirmDeleteId === tx.id ? (
                       <div className="inline-flex items-center gap-1.5">
                         <button
                           type="button"
@@ -185,14 +272,26 @@ const Contra: React.FC = () => {
                         </button>
                       </div>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDeleteId(tx.id)}
-                        className="p-1.5 text-[#6B655C] hover:text-[#B91C1C] hover:bg-[#FEF2F2] rounded-md transition-colors cursor-pointer"
-                        title="Delete transfer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="inline-flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(tx)}
+                          className="p-1.5 text-[#6B655C] hover:text-[#1B4D3E] hover:bg-[#F2EFE9] rounded-md transition-colors cursor-pointer"
+                          title="Edit transfer"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        {permissions.canDelete && (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(tx.id)}
+                            className="p-1.5 text-[#6B655C] hover:text-[#B91C1C] hover:bg-[#FEF2F2] rounded-md transition-colors cursor-pointer"
+                            title="Delete transfer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     )}
                   </td>
                 </tr>
@@ -222,11 +321,14 @@ const Contra: React.FC = () => {
           >
             <div className="px-6 py-4 border-b border-[#E5E0D5] flex justify-between items-center bg-[#F8F6F1]">
               <h2 className="font-display text-lg font-semibold text-[#1F1D1A]">
-                Record Contra Transfer
+                {editingId ? 'Edit Contra Transfer' : 'Record Contra Transfer'}
               </h2>
               <button
                 type="button"
-                onClick={() => setShowAddModal(false)}
+                onClick={() => {
+                  setEditingId(null);
+                  setShowAddModal(false);
+                }}
                 className="p-1.5 text-[#6B655C] hover:text-[#1F1D1A] rounded-lg cursor-pointer"
               >
                 <X className="w-4 h-4" />
@@ -252,8 +354,17 @@ const Contra: React.FC = () => {
                     required
                     value={reference}
                     onChange={e => setReference(e.target.value)}
-                    className="w-full px-3 py-2 bg-[#F8F6F1] border border-[#E5E0D5] rounded-lg text-sm font-mono text-[#1F1D1A] focus:outline-none focus:border-[#1B4D3E] focus:bg-[#FFFDF9]"
+                    className={`w-full px-3 py-2 bg-[#F8F6F1] border rounded-lg text-sm font-mono text-[#1F1D1A] focus:outline-none focus:bg-[#FFFDF9] ${
+                      duplicateRef
+                        ? 'border-[#B91C1C] focus:border-[#B91C1C]'
+                        : 'border-[#E5E0D5] focus:border-[#1B4D3E]'
+                    }`}
                   />
+                  {duplicateRef && (
+                    <p className="mt-1 text-[11px] text-[#B91C1C]">
+                      Reference &ldquo;{duplicateRef.reference}&rdquo; already exists.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -279,9 +390,11 @@ const Contra: React.FC = () => {
                     onChange={e => setFromAccount(e.target.value)}
                     className="w-full px-3 py-2 bg-[#F8F6F1] border border-[#E5E0D5] rounded-lg text-sm text-[#1F1D1A] focus:outline-none focus:border-[#1B4D3E] focus:bg-[#FFFDF9]"
                   >
-                    <option value="Petty Cash Drawer">Petty Cash Drawer</option>
-                    <option value="Corporate Bank Account">Corporate Bank Account</option>
-                    <option value="Savings Account">Savings Account</option>
+                    {accountOptions.map(acc => (
+                      <option key={`from-${acc}`} value={acc}>
+                        {acc}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <div>
@@ -293,9 +406,11 @@ const Contra: React.FC = () => {
                     onChange={e => setToAccount(e.target.value)}
                     className="w-full px-3 py-2 bg-[#F8F6F1] border border-[#E5E0D5] rounded-lg text-sm text-[#1F1D1A] focus:outline-none focus:border-[#1B4D3E] focus:bg-[#FFFDF9]"
                   >
-                    <option value="Corporate Bank Account">Corporate Bank Account</option>
-                    <option value="Petty Cash Drawer">Petty Cash Drawer</option>
-                    <option value="Savings Account">Savings Account</option>
+                    {accountOptions.map(acc => (
+                      <option key={`to-${acc}`} value={acc}>
+                        {acc}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -319,7 +434,10 @@ const Contra: React.FC = () => {
               <div className="pt-3 border-t border-[#E5E0D5] flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(false)}
+                  onClick={() => {
+                    setEditingId(null);
+                    setShowAddModal(false);
+                  }}
                   className="px-4 py-2 text-xs font-medium text-[#6B655C] hover:text-[#1F1D1A] rounded-lg cursor-pointer"
                 >
                   Cancel
@@ -328,7 +446,7 @@ const Contra: React.FC = () => {
                   type="submit"
                   className="px-5 py-2 bg-[#1B4D3E] hover:bg-[#143B2F] text-[#FFFDF9] font-semibold text-xs rounded-lg cursor-pointer transition-colors"
                 >
-                  Save Transfer
+                  {editingId ? 'Update Transfer' : 'Save Transfer'}
                 </button>
               </div>
             </form>

@@ -22,6 +22,7 @@ export const ALL_HEADS: HeadLink[] = [
   { label: 'Sundry Parties', path: '/app/parties', group: 'Assets & Reports' },
   { label: 'Fixed Assets', path: '/app/assets', group: 'Assets & Reports' },
   { label: 'Financial Reports', path: '/app/reports', group: 'Assets & Reports' },
+  { label: 'Settings', path: '/app/settings', group: 'Workspace' },
 ];
 
 interface ClickablePathProps {

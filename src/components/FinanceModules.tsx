@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 import { useStore } from '../store';
 import { LedgerTransaction, FixedAsset, PartnerCapital } from '../types';
 import {
@@ -347,10 +348,14 @@ export const LedgerModule: React.FC = () => {
       isBankCleared: vType === 'contra' ? true : false,
     };
 
-    if (showVoucherModal === 'add') {
-      store.addLedgerTransaction(prepared);
-    } else {
-      store.editLedgerTransaction(editingVoucherId!, prepared);
+    const res =
+      showVoucherModal === 'add'
+        ? store.addLedgerTransaction(prepared)
+        : store.editLedgerTransaction(editingVoucherId!, prepared);
+
+    if (!res.ok) {
+      toast.error(res.error || 'Duplicate invoice / reference number is not allowed.');
+      return;
     }
 
     // Reset
@@ -582,13 +587,30 @@ export const LedgerModule: React.FC = () => {
     const credits: { [account: string]: number } = {};
 
     // Initial balances count
+    const seededAccountNames = new Set<string>();
     ledgerAccounts.forEach(acc => {
       if (acc.initialBalance > 0) {
+        seededAccountNames.add(acc.name.trim().toLowerCase());
         const balanceNormal = acc.type === 'Asset' || acc.type === 'Expense';
         if (balanceNormal) {
           debits[acc.name] = (debits[acc.name] || 0) + acc.initialBalance;
         } else {
           credits[acc.name] = (credits[acc.name] || 0) + acc.initialBalance;
+        }
+      }
+    });
+
+    // Opening balances defined in Settings -> Item / Ledger Creation
+    (store.ledgerItems || []).forEach(item => {
+      if (
+        item.openingBalance &&
+        item.openingBalance > 0 &&
+        !seededAccountNames.has(item.name.trim().toLowerCase())
+      ) {
+        if ((item.openingBalanceType || 'dr') === 'cr') {
+          credits[item.name] = (credits[item.name] || 0) + item.openingBalance;
+        } else {
+          debits[item.name] = (debits[item.name] || 0) + item.openingBalance;
         }
       }
     });
@@ -2266,13 +2288,30 @@ export const FinalAccountsModule: React.FC = () => {
     const debits: { [account: string]: number } = {};
     const credits: { [account: string]: number } = {};
 
+    const seededAccountNames = new Set<string>();
     ledgerAccounts.forEach(acc => {
       if (acc.initialBalance > 0) {
+        seededAccountNames.add(acc.name.trim().toLowerCase());
         const balanceNormal = acc.type === 'Asset' || acc.type === 'Expense';
         if (balanceNormal) {
           debits[acc.name] = (debits[acc.name] || 0) + acc.initialBalance;
         } else {
           credits[acc.name] = (credits[acc.name] || 0) + acc.initialBalance;
+        }
+      }
+    });
+
+    // Opening balances defined in Settings -> Item / Ledger Creation
+    (store.ledgerItems || []).forEach(item => {
+      if (
+        item.openingBalance &&
+        item.openingBalance > 0 &&
+        !seededAccountNames.has(item.name.trim().toLowerCase())
+      ) {
+        if ((item.openingBalanceType || 'dr') === 'cr') {
+          credits[item.name] = (credits[item.name] || 0) + item.openingBalance;
+        } else {
+          debits[item.name] = (debits[item.name] || 0) + item.openingBalance;
         }
       }
     });

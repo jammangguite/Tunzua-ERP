@@ -184,11 +184,92 @@ const inferPartyName = (tx: LedgerTransaction, direction: 'outward' | 'inward'):
   return cleanDesc.slice(0, 36) || (direction === 'outward' ? 'Walk-in Customer' : 'General Vendor');
 };
 
+export interface EntryGstCalculation {
+  inputAmount: number;
+  rate: number;
+  mode: 'excluding' | 'including';
+  supplyType: GstSupplyType;
+  taxableAmount: number;
+  gstAmount: number;
+  cgstAmount: number;
+  sgstAmount: number;
+  igstAmount: number;
+  totalAmount: number;
+}
+
+export const stripGstTag = (description: string): string => {
+  if (!description) return '';
+  return description
+    .replace(/\s*\[GST Rule Compliant:[^\]]*\]/g, '')
+    .trim();
+};
+
+export const calculateEntryGst = (
+  inputAmount: number,
+  rate: number,
+  mode: 'excluding' | 'including' = 'excluding',
+  supplyType: GstSupplyType = 'intra'
+): EntryGstCalculation => {
+  const safeInput = Math.max(0, Number.isFinite(inputAmount) ? inputAmount : 0);
+  const safeRate = Math.max(0, Math.min(100, Number.isFinite(rate) ? rate : 0));
+
+  let taxableAmount = 0;
+  let gstAmount = 0;
+  let totalAmount = 0;
+
+  if (safeRate <= 0) {
+    taxableAmount = round2(safeInput);
+    gstAmount = 0;
+    totalAmount = round2(safeInput);
+  } else if (mode === 'including') {
+    totalAmount = round2(safeInput);
+    taxableAmount = round2(totalAmount / (1 + safeRate / 100));
+    gstAmount = round2(totalAmount - taxableAmount);
+  } else {
+    taxableAmount = round2(safeInput);
+    gstAmount = round2((taxableAmount * safeRate) / 100);
+    totalAmount = round2(taxableAmount + gstAmount);
+  }
+
+  let cgstAmount = 0;
+  let sgstAmount = 0;
+  let igstAmount = 0;
+
+  if (supplyType === 'inter') {
+    igstAmount = gstAmount;
+  } else {
+    cgstAmount = round2(gstAmount / 2);
+    sgstAmount = round2(gstAmount - cgstAmount);
+  }
+
+  return {
+    inputAmount: round2(safeInput),
+    rate: safeRate,
+    mode,
+    supplyType,
+    taxableAmount,
+    gstAmount,
+    cgstAmount,
+    sgstAmount,
+    igstAmount,
+    totalAmount,
+  };
+};
+
+export const formatGstTag = (calc: EntryGstCalculation): string => {
+  if (calc.rate <= 0 || calc.gstAmount <= 0) return '';
+  if (calc.supplyType === 'inter') {
+    return `[GST Rule Compliant: Inter-State, Rate=${calc.rate}%, Taxable=${calc.taxableAmount.toFixed(2)}, IGST=${calc.igstAmount.toFixed(2)}]`;
+  }
+  return `[GST Rule Compliant: Intra-State, Rate=${calc.rate}%, Taxable=${calc.taxableAmount.toFixed(2)}, CGST=${calc.cgstAmount.toFixed(2)}, SGST=${calc.sgstAmount.toFixed(2)}]`;
+};
+
 const parseTaggedGst = (tx: LedgerTransaction) => {
   if (!tx.description.includes('[GST Rule Compliant:')) return null;
   const gstPart = tx.description.split('[GST Rule Compliant:')[1]?.split(']')[0] || '';
   const isInter = gstPart.includes('Inter-State');
   const gstInMatch = gstPart.match(/GSTIN=([A-Z0-9]+)/i);
+  const rateMatch = gstPart.match(/Rate=([\d.]+)%/i);
   const taxableMatch = gstPart.match(/Taxable=([\d.]+)/);
   const cgstMatch = gstPart.match(/CGST=([\d.]+)/);
   const sgstMatch = gstPart.match(/SGST=([\d.]+)/);
@@ -199,7 +280,11 @@ const parseTaggedGst = (tx: LedgerTransaction) => {
   const sgst = sgstMatch ? parseFloat(sgstMatch[1]) : 0;
   const igst = igstMatch ? parseFloat(igstMatch[1]) : 0;
   const totalTax = round2(cgst + sgst + igst);
-  const derivedRate = taxable > 0 ? Math.round((totalTax / taxable) * 100) : 18;
+  const derivedRate = rateMatch
+    ? parseFloat(rateMatch[1])
+    : taxable > 0
+    ? round2((totalTax / taxable) * 100)
+    : 18;
 
   return {
     partyGstin: gstInMatch ? gstInMatch[1].toUpperCase() : '',
@@ -208,8 +293,80 @@ const parseTaggedGst = (tx: LedgerTransaction) => {
     cgst: round2(cgst),
     sgst: round2(sgst),
     igst: round2(igst),
+    totalTax,
     rate: derivedRate,
   };
+};
+
+export interface TransactionGstDetails {
+  hasGst: boolean;
+  rate: number;
+  mode: 'excluding' | 'including';
+  supplyType: GstSupplyType;
+  taxableAmount: number;
+  gstAmount: number;
+  cgstAmount: number;
+  sgstAmount: number;
+  igstAmount: number;
+  totalAmount: number;
+}
+
+export const getTransactionGstDetails = (tx: LedgerTransaction): TransactionGstDetails | null => {
+  if (
+    typeof tx.gstRate === 'number' &&
+    tx.gstRate > 0 &&
+    typeof tx.gstAmount === 'number' &&
+    tx.gstAmount > 0
+  ) {
+    const supplyType: GstSupplyType = tx.gstSupplyType || (tx.igstAmount && tx.igstAmount > 0 ? 'inter' : 'intra');
+    const taxableAmount =
+      typeof tx.taxableAmount === 'number'
+        ? round2(tx.taxableAmount)
+        : round2(Math.max(0, tx.amount - tx.gstAmount));
+    const igstAmount =
+      supplyType === 'inter'
+        ? round2(tx.igstAmount ?? tx.gstAmount)
+        : 0;
+    const cgstAmount =
+      supplyType === 'intra'
+        ? round2(tx.cgstAmount ?? tx.gstAmount / 2)
+        : 0;
+    const sgstAmount =
+      supplyType === 'intra'
+        ? round2(tx.sgstAmount ?? tx.gstAmount - cgstAmount)
+        : 0;
+
+    return {
+      hasGst: true,
+      rate: tx.gstRate,
+      mode: tx.gstMode || 'excluding',
+      supplyType,
+      taxableAmount,
+      gstAmount: round2(tx.gstAmount),
+      cgstAmount,
+      sgstAmount,
+      igstAmount,
+      totalAmount: round2(tx.amount),
+    };
+  }
+
+  const tagged = parseTaggedGst(tx);
+  if (tagged && tagged.totalTax > 0) {
+    return {
+      hasGst: true,
+      rate: tagged.rate,
+      mode: 'excluding',
+      supplyType: tagged.supplyType,
+      taxableAmount: tagged.taxable > 0 ? tagged.taxable : round2(Math.max(0, tx.amount - tagged.totalTax)),
+      gstAmount: tagged.totalTax,
+      cgstAmount: tagged.cgst,
+      sgstAmount: tagged.sgst,
+      igstAmount: tagged.igst,
+      totalAmount: round2(tx.amount),
+    };
+  }
+
+  return null;
 };
 
 export const computeGstFromLedger = (
@@ -233,7 +390,8 @@ export const computeGstFromLedger = (
       (tx.type === 'other_income' &&
         (tx.creditAccount.toLowerCase().includes('sales') ||
           tx.creditAccount.toLowerCase().includes('revenue') ||
-          tx.description.includes('[GST Rule Compliant:')));
+          tx.description.includes('[GST Rule Compliant:') ||
+          (tx.gstAmount ?? 0) > 0));
 
     const isInward =
       tx.type === 'purchase' ||
@@ -247,6 +405,7 @@ export const computeGstFromLedger = (
 
     const direction: 'outward' | 'inward' = isOutward ? 'outward' : 'inward';
     const override = overrides[tx.id] || {};
+    const structured = getTransactionGstDetails(tx);
     const tagged = parseTaggedGst(tx);
 
     const partyGstin = (override.partyGstin ?? tagged?.partyGstin ?? '').trim().toUpperCase();
@@ -257,14 +416,16 @@ export const computeGstFromLedger = (
         ? partyGstin.slice(0, 2) === profile.stateCode
           ? 'intra'
           : 'inter'
-        : tagged?.supplyType ?? profile.defaultSupplyType);
+        : structured?.supplyType ?? tagged?.supplyType ?? profile.defaultSupplyType);
 
     const rate =
       override.rate !== undefined
         ? override.rate
-        : tagged
-          ? tagged.rate
-          : profile.defaultRate;
+        : structured
+          ? structured.rate
+          : tagged
+            ? tagged.rate
+            : profile.defaultRate;
 
     const supplyClass: GstSupplyClass =
       override.supplyClass ??
@@ -279,13 +440,27 @@ export const computeGstFromLedger = (
     let cgst = 0;
     let sgst = 0;
 
-    if (tagged && override.rate === undefined && override.supplyType === undefined && override.supplyClass === undefined) {
-      taxableValue = tagged.taxable > 0 ? tagged.taxable : round2(tx.amount / (1 + effectiveRate / 100));
-      igst = tagged.igst;
-      cgst = tagged.cgst;
-      sgst = tagged.sgst;
-      totalTax = round2(igst + cgst + sgst);
-      invoiceValue = round2(taxableValue + totalTax);
+    if (
+      (structured || tagged) &&
+      override.rate === undefined &&
+      override.supplyType === undefined &&
+      override.supplyClass === undefined
+    ) {
+      if (structured) {
+        taxableValue = structured.taxableAmount;
+        igst = structured.igstAmount;
+        cgst = structured.cgstAmount;
+        sgst = structured.sgstAmount;
+        totalTax = structured.gstAmount;
+        invoiceValue = round2(taxableValue + totalTax);
+      } else if (tagged) {
+        taxableValue = tagged.taxable > 0 ? tagged.taxable : round2(tx.amount / (1 + effectiveRate / 100));
+        igst = tagged.igst;
+        cgst = tagged.cgst;
+        sgst = tagged.sgst;
+        totalTax = round2(igst + cgst + sgst);
+        invoiceValue = round2(taxableValue + totalTax);
+      }
     } else if (profile.priceBasis === 'inclusive') {
       invoiceValue = round2(tx.amount);
       taxableValue = effectiveRate > 0 ? round2(tx.amount / (1 + effectiveRate / 100)) : invoiceValue;

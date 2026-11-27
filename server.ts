@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import { GoogleGenAI, Type } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
-import { AppDatabase, LedgerTransaction, InventoryItem, Task } from './src/types.js';
+import { AppDatabase, LedgerTransaction, InventoryItem, Task, WorkspaceUser, UserRole } from './src/types.js';
 
 const app = express();
 const PORT = 3000;
@@ -18,11 +18,123 @@ app.use(express.json());
 // Initialize local disk storage path
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'ledger_db.json');
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const SHEET_CONFIG_FILE = path.join(DATA_DIR, 'sheet_config.json');
 
 // Ensure data folder and seed database exist
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
+
+const DEFAULT_USERS: WorkspaceUser[] = [
+  {
+    id: 'user-owner-admin',
+    name: 'Workspace Admin',
+    email: 'jammangguite@gmail.com',
+    role: 'admin',
+    status: 'active',
+    addedAt: Date.now() - 86400000 * 30,
+  },
+  {
+    id: 'user-member-1',
+    name: 'Ledger Associate',
+    email: 'associate@tunzua.com',
+    role: 'user',
+    status: 'active',
+    addedAt: Date.now() - 86400000 * 14,
+  },
+];
+
+function readUsers(): WorkspaceUser[] {
+  if (!fs.existsSync(USERS_FILE)) {
+    fs.writeFileSync(USERS_FILE, JSON.stringify(DEFAULT_USERS, null, 2), 'utf-8');
+    return DEFAULT_USERS;
+  }
+  try {
+    const raw = fs.readFileSync(USERS_FILE, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed;
+    }
+    return DEFAULT_USERS;
+  } catch (err) {
+    console.error('Failed to read users file, restoring defaults.', err);
+    return DEFAULT_USERS;
+  }
+}
+
+function writeUsers(users: WorkspaceUser[]) {
+  try {
+    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Failed to write users file:', err);
+  }
+}
+
+function isServerAdminEmail(emailHeader: unknown, users: WorkspaceUser[]): boolean {
+  if (typeof emailHeader !== 'string' || !emailHeader.trim()) return false;
+  const normalized = emailHeader.trim().toLowerCase();
+  return users.some(
+    u => u.email.trim().toLowerCase() === normalized && u.role === 'admin' && u.status === 'active'
+  );
+}
+
+function getPrimaryAdminEmail(users: WorkspaceUser[]): string {
+  const activeAdmin = users.find(u => u.role === 'admin' && u.status === 'active');
+  return activeAdmin?.email || DEFAULT_USERS[0].email;
+}
+
+interface AdminSheetConfig {
+  spreadsheetId: string;
+  spreadsheetUrl: string;
+  title: string;
+  adminEmail: string;
+  linkedByEmail: string;
+  linkedAt: string;
+  lastSavedAt: string;
+  lastSavedByEmail: string;
+}
+
+function readSheetConfig(): AdminSheetConfig | null {
+  if (!fs.existsSync(SHEET_CONFIG_FILE)) return null;
+  try {
+    const raw = fs.readFileSync(SHEET_CONFIG_FILE, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.spreadsheetId === 'string' && parsed.spreadsheetId.trim()) {
+      return parsed as AdminSheetConfig;
+    }
+    return null;
+  } catch (err) {
+    console.error('Failed to read sheet config file:', err);
+    return null;
+  }
+}
+
+function writeSheetConfig(config: AdminSheetConfig | null) {
+  try {
+    if (!config) {
+      if (fs.existsSync(SHEET_CONFIG_FILE)) {
+        fs.unlinkSync(SHEET_CONFIG_FILE);
+      }
+      return;
+    }
+    fs.writeFileSync(SHEET_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Failed to write sheet config file:', err);
+  }
+}
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const EMPTY_DB: AppDatabase = {
+  tasks: [],
+  inventory: [],
+  ledger: [],
+  fixedAssets: [],
+  partners: [],
+  payroll: [],
+  bankStatements: [],
+};
 
 // Full seed database representing realistic starting business accounts
 const DEFAULT_DB: AppDatabase = {
@@ -301,8 +413,9 @@ function writeDb(db: AppDatabase) {
   }
 }
 
-// Ensure database is seeded on load
+// Ensure database and users directory are seeded on load
 readDb();
+readUsers();
 
 /**
  * Server-side Gemini client wrapper
@@ -328,12 +441,38 @@ function getAi(): GoogleGenAI {
 
 // API endpoint: Sync client state with central server-side ledger
 app.post('/api/sync', (req: Request, res: Response) => {
-  const clientData = req.body as Partial<AppDatabase>;
+  const clientData = (req.body || {}) as Partial<AppDatabase>;
   const currentDb = readDb();
 
-  // Smart merging algorithm (merge arrays by unique 'id')
-  const mergeCollection = <T extends { id: string }>(server: T[], client?: T[]): T[] => {
+  // Initial empty pull: return current server snapshot without mutating
+  const hasAnyCollection =
+    Array.isArray(clientData.tasks) ||
+    Array.isArray(clientData.inventory) ||
+    Array.isArray(clientData.ledger) ||
+    Array.isArray(clientData.fixedAssets) ||
+    Array.isArray(clientData.partners) ||
+    Array.isArray(clientData.payroll) ||
+    Array.isArray(clientData.bankStatements);
+
+  if (!hasAnyCollection) {
+    return res.json({ success: true, db: currentDb });
+  }
+
+  const users = readUsers();
+  const actorEmail = req.header('x-tunzua-actor-email');
+  const canDeleteOnServer = isServerAdminEmail(actorEmail, users);
+
+  const syncCollection = <T extends { id: string }>(server: T[], client?: T[]): T[] => {
     if (!client || !Array.isArray(client)) return server;
+
+    const clientIds = new Set(client.map(item => item.id));
+    const hasDeletions = server.some(item => !clientIds.has(item.id));
+
+    // Honor deletions only for verified server Admins; non-Admins can only add/edit
+    if (!hasDeletions || canDeleteOnServer) {
+      return client;
+    }
+
     const map = new Map<string, T>();
     server.forEach(item => map.set(item.id, item));
     client.forEach(item => map.set(item.id, { ...map.get(item.id), ...item }));
@@ -341,24 +480,293 @@ app.post('/api/sync', (req: Request, res: Response) => {
   };
 
   const updatedDb: AppDatabase = {
-    tasks: mergeCollection(currentDb.tasks, clientData.tasks),
-    inventory: mergeCollection(currentDb.inventory, clientData.inventory),
-    ledger: mergeCollection(currentDb.ledger, clientData.ledger),
-    fixedAssets: mergeCollection(currentDb.fixedAssets, clientData.fixedAssets),
-    partners: mergeCollection(currentDb.partners, clientData.partners),
-    payroll: mergeCollection(currentDb.payroll, clientData.payroll),
-    bankStatements: mergeCollection(currentDb.bankStatements, clientData.bankStatements),
+    tasks: syncCollection(currentDb.tasks, clientData.tasks),
+    inventory: syncCollection(currentDb.inventory, clientData.inventory),
+    ledger: syncCollection(currentDb.ledger, clientData.ledger),
+    fixedAssets: syncCollection(currentDb.fixedAssets, clientData.fixedAssets),
+    partners: syncCollection(currentDb.partners, clientData.partners),
+    payroll: syncCollection(currentDb.payroll, clientData.payroll),
+    bankStatements: syncCollection(currentDb.bankStatements, clientData.bankStatements),
   };
 
   writeDb(updatedDb);
   res.json({ success: true, db: updatedDb });
 });
 
-// API endpoint: Reset Database to original seed state (useful user function)
+// API endpoint: Clear all demo/ledger data to a clean blank slate (Admin-only)
+app.post('/api/clear', (req: Request, res: Response) => {
+  const users = readUsers();
+  const actorEmail = req.header('x-tunzua-actor-email');
+  if (!isServerAdminEmail(actorEmail, users)) {
+    return res.status(403).json({ success: false, error: 'Admin role is required to clear workspace data.' });
+  }
+  const blankDb: AppDatabase = JSON.parse(JSON.stringify(EMPTY_DB));
+  writeDb(blankDb);
+  res.json({ success: true, db: blankDb });
+});
+
+// API endpoint: Reset Database to original seed state (Admin-only)
 app.post('/api/reset', (req: Request, res: Response) => {
+  const users = readUsers();
+  const actorEmail = req.header('x-tunzua-actor-email');
+  if (!isServerAdminEmail(actorEmail, users)) {
+    return res.status(403).json({ success: false, error: 'Admin role is required to reset workspace data.' });
+  }
   const freshDb = JSON.parse(JSON.stringify(DEFAULT_DB));
   writeDb(freshDb);
   res.json({ success: true, db: freshDb });
+});
+
+// API endpoints: Multi-User Management (persisted in data/users.json)
+app.get('/api/users', (_req: Request, res: Response) => {
+  const users = readUsers();
+  res.json({ success: true, users });
+});
+
+app.post('/api/users', (req: Request, res: Response) => {
+  const users = readUsers();
+  const actorEmail = req.header('x-tunzua-actor-email');
+  if (!isServerAdminEmail(actorEmail, users)) {
+    return res.status(403).json({ success: false, error: 'Only Admins can add users.' });
+  }
+
+  const { name, email, role, status } = req.body || {};
+  if (typeof name !== 'string' || !name.trim() || name.trim().length > 120) {
+    return res.status(400).json({ success: false, error: 'A valid user name is required.' });
+  }
+  if (typeof email !== 'string' || !EMAIL_PATTERN.test(email.trim())) {
+    return res.status(400).json({ success: false, error: 'A valid email address is required.' });
+  }
+  const cleanEmail = email.trim().toLowerCase();
+  if (users.some(u => u.email.trim().toLowerCase() === cleanEmail)) {
+    return res.status(409).json({ success: false, error: 'A user with this email already exists.' });
+  }
+
+  const cleanRole: UserRole = role === 'admin' ? 'admin' : 'user';
+  const cleanStatus: 'active' | 'inactive' = status === 'inactive' ? 'inactive' : 'active';
+
+  const newUser: WorkspaceUser = {
+    id: `user-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    name: name.trim(),
+    email: cleanEmail,
+    role: cleanRole,
+    status: cleanStatus,
+    addedAt: Date.now(),
+  };
+
+  const next = [newUser, ...users];
+  writeUsers(next);
+  res.status(201).json({ success: true, user: newUser, users: next });
+});
+
+app.patch('/api/users/:id', (req: Request, res: Response) => {
+  const users = readUsers();
+  const actorEmail = req.header('x-tunzua-actor-email');
+  if (!isServerAdminEmail(actorEmail, users)) {
+    return res.status(403).json({ success: false, error: 'Only Admins can update user roles.' });
+  }
+
+  const { id } = req.params;
+  const target = users.find(u => u.id === id);
+  if (!target) {
+    return res.status(404).json({ success: false, error: 'User not found.' });
+  }
+
+  const { name, email, role, status } = req.body || {};
+  const nextRole: UserRole = role === 'admin' || role === 'user' ? role : target.role;
+  const nextStatus: 'active' | 'inactive' =
+    status === 'active' || status === 'inactive' ? status : target.status;
+
+  // Prevent demoting or deactivating the last active admin
+  const activeAdmins = users.filter(u => u.role === 'admin' && u.status === 'active');
+  if (
+    target.role === 'admin' &&
+    target.status === 'active' &&
+    activeAdmins.length <= 1 &&
+    (nextRole !== 'admin' || nextStatus !== 'active')
+  ) {
+    return res.status(400).json({
+      success: false,
+      error: 'At least one active Admin account must remain in the workspace.',
+    });
+  }
+
+  let cleanEmail = target.email;
+  if (typeof email === 'string' && email.trim()) {
+    if (!EMAIL_PATTERN.test(email.trim())) {
+      return res.status(400).json({ success: false, error: 'Invalid email address.' });
+    }
+    const candidate = email.trim().toLowerCase();
+    if (users.some(u => u.id !== id && u.email.trim().toLowerCase() === candidate)) {
+      return res.status(409).json({ success: false, error: 'Email is already assigned to another user.' });
+    }
+    cleanEmail = candidate;
+  }
+
+  const nextName =
+    typeof name === 'string' && name.trim() ? name.trim().slice(0, 120) : target.name;
+
+  const next = users.map(u =>
+    u.id === id
+      ? { ...u, name: nextName, email: cleanEmail, role: nextRole, status: nextStatus }
+      : u
+  );
+  writeUsers(next);
+  res.json({ success: true, users: next });
+});
+
+app.delete('/api/users/:id', (req: Request, res: Response) => {
+  const users = readUsers();
+  const actorEmail = req.header('x-tunzua-actor-email');
+  if (!isServerAdminEmail(actorEmail, users)) {
+    return res.status(403).json({ success: false, error: 'Only Admins can delete users.' });
+  }
+
+  const { id } = req.params;
+  const target = users.find(u => u.id === id);
+  if (!target) {
+    return res.status(404).json({ success: false, error: 'User not found.' });
+  }
+
+  const activeAdmins = users.filter(u => u.role === 'admin' && u.status === 'active');
+  if (target.role === 'admin' && target.status === 'active' && activeAdmins.length <= 1) {
+    return res.status(400).json({
+      success: false,
+      error: 'Cannot remove the last active Admin account.',
+    });
+  }
+
+  const next = users.filter(u => u.id !== id);
+  writeUsers(next);
+  res.json({ success: true, users: next });
+});
+
+// Self-registration for new workspace users: assigns standard 'user' role and NEVER alters the Admin's linked Google Sheet
+app.post('/api/users/register', (req: Request, res: Response) => {
+  const users = readUsers();
+  const { name, email } = req.body || {};
+  if (typeof email !== 'string' || !EMAIL_PATTERN.test(email.trim())) {
+    return res.status(400).json({ success: false, error: 'A valid email address is required.' });
+  }
+  const cleanEmail = email.trim().toLowerCase();
+  const existing = users.find(u => u.email.trim().toLowerCase() === cleanEmail);
+  if (existing) {
+    return res.json({ success: true, user: existing, users, sheet: readSheetConfig() });
+  }
+
+  const displayName =
+    typeof name === 'string' && name.trim()
+      ? name.trim().slice(0, 120)
+      : cleanEmail.split('@')[0];
+
+  const newUser: WorkspaceUser = {
+    id: `user-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    name: displayName,
+    email: cleanEmail,
+    role: 'user',
+    status: 'active',
+    addedAt: Date.now(),
+  };
+
+  const next = [...users, newUser];
+  writeUsers(next);
+  res.status(201).json({ success: true, user: newUser, users: next, sheet: readSheetConfig() });
+});
+
+// Workspace-wide Admin Google Sheet configuration (always shared across all users; only Admin can link/change/unlink)
+app.get('/api/sheet-config', (_req: Request, res: Response) => {
+  const users = readUsers();
+  res.json({
+    success: true,
+    sheet: readSheetConfig(),
+    adminEmail: getPrimaryAdminEmail(users),
+  });
+});
+
+app.put('/api/sheet-config', (req: Request, res: Response) => {
+  const users = readUsers();
+  const actorEmail = req.header('x-tunzua-actor-email');
+  if (!isServerAdminEmail(actorEmail, users)) {
+    return res.status(403).json({
+      success: false,
+      error: 'Only the Workspace Admin can link or change the master Google Sheet.',
+    });
+  }
+
+  const { spreadsheetId, spreadsheetUrl, title, lastSavedAt } = req.body || {};
+  if (typeof spreadsheetId !== 'string' || !spreadsheetId.trim()) {
+    return res.status(400).json({ success: false, error: 'A valid spreadsheetId is required.' });
+  }
+
+  const cleanId = spreadsheetId.trim();
+  const nowIso = typeof lastSavedAt === 'string' && lastSavedAt ? lastSavedAt : new Date().toISOString();
+  const cleanActor = (actorEmail || getPrimaryAdminEmail(users)).trim().toLowerCase();
+  const existing = readSheetConfig();
+
+  const updated: AdminSheetConfig = {
+    spreadsheetId: cleanId,
+    spreadsheetUrl:
+      typeof spreadsheetUrl === 'string' && spreadsheetUrl.trim()
+        ? spreadsheetUrl.trim()
+        : `https://docs.google.com/spreadsheets/d/${cleanId}/edit`,
+    title:
+      typeof title === 'string' && title.trim()
+        ? title.trim().slice(0, 200)
+        : 'Tunzua Master Ledger',
+    adminEmail: getPrimaryAdminEmail(users),
+    linkedByEmail: existing && existing.spreadsheetId === cleanId ? existing.linkedByEmail : cleanActor,
+    linkedAt: existing && existing.spreadsheetId === cleanId ? existing.linkedAt : nowIso,
+    lastSavedAt: nowIso,
+    lastSavedByEmail: cleanActor,
+  };
+
+  writeSheetConfig(updated);
+  res.json({ success: true, sheet: updated, adminEmail: updated.adminEmail });
+});
+
+app.post('/api/sheet-config/saved', (req: Request, res: Response) => {
+  const existing = readSheetConfig();
+  if (!existing) {
+    return res.status(404).json({
+      success: false,
+      error: 'No Admin Google Sheet is linked yet.',
+    });
+  }
+
+  const { spreadsheetId, lastSavedAt, savedByEmail } = req.body || {};
+  if (typeof spreadsheetId === 'string' && spreadsheetId.trim() && spreadsheetId.trim() !== existing.spreadsheetId) {
+    return res.status(403).json({
+      success: false,
+      error: 'Data must always be saved to the Admin-linked Google Sheet.',
+    });
+  }
+
+  const actorEmail =
+    (typeof savedByEmail === 'string' && savedByEmail.trim()) ||
+    (typeof req.header('x-tunzua-actor-email') === 'string' && req.header('x-tunzua-actor-email')!.trim()) ||
+    existing.lastSavedByEmail;
+
+  const updated: AdminSheetConfig = {
+    ...existing,
+    lastSavedAt: typeof lastSavedAt === 'string' && lastSavedAt ? lastSavedAt : new Date().toISOString(),
+    lastSavedByEmail: actorEmail,
+  };
+
+  writeSheetConfig(updated);
+  res.json({ success: true, sheet: updated });
+});
+
+app.delete('/api/sheet-config', (req: Request, res: Response) => {
+  const users = readUsers();
+  const actorEmail = req.header('x-tunzua-actor-email');
+  if (!isServerAdminEmail(actorEmail, users)) {
+    return res.status(403).json({
+      success: false,
+      error: 'Only the Workspace Admin can unlink the master Google Sheet.',
+    });
+  }
+  writeSheetConfig(null);
+  res.json({ success: true, sheet: null, adminEmail: getPrimaryAdminEmail(users) });
 });
 
 // API endpoint: NLP accounting query or action execution
@@ -884,9 +1292,65 @@ async function startServer() {
   // Vite integration
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, ws: false, hmr: false },
       appType: 'spa',
     });
+
+    // HMR is disabled in this environment; serve a WebSocket-free /@vite/client shim
+    // that preserves CSS style injection and HMR module hooks without opening a dead socket.
+    app.get('/@vite/client', (_req: Request, res: Response) => {
+      res.type('application/javascript').send(`
+const sheetsMap = new Map();
+
+export function updateStyle(id, content) {
+  let style = sheetsMap.get(id);
+  if (!style) {
+    style = document.createElement('style');
+    style.setAttribute('type', 'text/css');
+    style.setAttribute('data-vite-dev-id', id);
+    style.textContent = content;
+    document.head.appendChild(style);
+    sheetsMap.set(id, style);
+  } else {
+    style.textContent = content;
+  }
+}
+
+export function removeStyle(id) {
+  const style = sheetsMap.get(id);
+  if (style) {
+    document.head.removeChild(style);
+    sheetsMap.delete(id);
+  }
+}
+
+export function createHotContext() {
+  const noop = () => {};
+  return {
+    data: {},
+    accept: noop,
+    acceptExports: noop,
+    dispose: noop,
+    prune: noop,
+    decline: noop,
+    invalidate: noop,
+    on: noop,
+    off: noop,
+    send: noop,
+  };
+}
+
+export function injectQuery(url, queryToInject) {
+  if (!url || !queryToInject) return url;
+  const [base, hash] = url.split('#');
+  const sep = base.includes('?') ? '&' : '?';
+  return base + sep + queryToInject + (hash ? '#' + hash : '');
+}
+
+export class ErrorOverlay extends HTMLElement {}
+`);
+    });
+
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');

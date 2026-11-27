@@ -16,6 +16,8 @@ import FixedAssets from "@/pages/FixedAssets";
 import Reports from "@/pages/Reports";
 import Daybook from "@/pages/Daybook";
 import RecurringBills from "@/pages/RecurringBills";
+import Settings from "@/pages/Settings";
+import { OfflineIndicator } from "@/components/OfflineIndicator";
 
 function RouterShell() {
   const location = useLocation();
@@ -48,6 +50,7 @@ function RouterShell() {
         <Route path="parties" element={<Parties />} />
         <Route path="assets" element={<FixedAssets />} />
         <Route path="reports" element={<Reports />} />
+        <Route path="settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/app" replace />} />
       </Route>
       <Route path="*" element={<Navigate to="/login" replace />} />
@@ -60,6 +63,7 @@ export default function App() {
     <AuthProvider>
       <BrowserRouter>
         <RouterShell />
+        <OfflineIndicator />
         <Toaster position="top-right" theme="light" closeButton richColors />
       </BrowserRouter>
     </AuthProvider>

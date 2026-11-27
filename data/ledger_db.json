@@ -1,0 +1,22 @@
+{
+  "tasks": [],
+  "inventory": [],
+  "ledger": [
+    {
+      "id": "purchases-1795626353105",
+      "date": "2026-11-25",
+      "description": "TEST",
+      "type": "purchase",
+      "debitAccount": "Cash",
+      "creditAccount": "Corporate Bank Account",
+      "amount": 1111,
+      "reference": "PO-1111",
+      "isBankCleared": true,
+      "createdAt": 1795626353105
+    }
+  ],
+  "fixedAssets": [],
+  "partners": [],
+  "payroll": [],
+  "bankStatements": []
+}

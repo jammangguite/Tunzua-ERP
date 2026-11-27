@@ -3,6 +3,25 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#1B4D3E" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Tunzua" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <script>
+      window.__tunzuaDeferredPrompt = null;
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        window.__tunzuaDeferredPrompt = e;
+        window.dispatchEvent(new Event('tunzua-pwa-prompt-ready'));
+      });
+      window.addEventListener('appinstalled', function () {
+        window.__tunzuaDeferredPrompt = null;
+        window.dispatchEvent(new Event('tunzua-pwa-installed'));
+      });
+    </script>
     <title>Tunzua — Simple Accounting Ledger</title>
     <meta
       name="description"

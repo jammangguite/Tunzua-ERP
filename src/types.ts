@@ -48,6 +48,14 @@ export interface LedgerTransaction {
   isBankCleared: boolean;
   createdAt: number;
   attachmentUrl?: string; // Stores receipt capture or file attachment data URL/base64 blob
+  taxableAmount?: number;
+  gstRate?: number;
+  gstAmount?: number;
+  gstMode?: GstTaxMode;
+  gstSupplyType?: 'intra' | 'inter';
+  cgstAmount?: number;
+  sgstAmount?: number;
+  igstAmount?: number;
 }
 
 export interface FixedAsset {
@@ -162,11 +170,56 @@ export interface RecurringBill {
   notes?: string;
 }
 
+export type GstTaxMode = 'excluding' | 'including';
+export type DiscountType = 'percentage' | 'flat';
+export type MasterRecordKind = 'item' | 'ledger';
+export type OpeningBalanceType = 'dr' | 'cr';
+
+export interface LedgerItemMaster {
+  id: string;
+  kind: MasterRecordKind;
+  name: string;
+  gstRate: number; // e.g. 0, 5, 12, 18, 28
+  gstMode: GstTaxMode; // 'excluding' | 'including'
+  discount: number;
+  discountType: DiscountType;
+  defaultPrice?: number;
+  openingBalance?: number;
+  openingBalanceType?: OpeningBalanceType;
+  hsnOrCode?: string;
+  accountGroup?: string;
+  createdAt: number;
+}
+
+export type UserRole = 'admin' | 'user';
+
+export interface WorkspaceUser {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  status: 'active' | 'inactive';
+  addedAt: number;
+}
+
+export interface RolePermissions {
+  canCreate: boolean;
+  canEdit: boolean;
+  canPrint: boolean;
+  canExport: boolean;
+  canDelete: boolean;
+  canManageUsers: boolean;
+}
+
 export interface TunzuaBackupPayload {
   version: string;
   exportedAt: string;
   companySettings: CompanySettings;
   recurringBills: RecurringBill[];
+  ledgerItems?: LedgerItemMaster[];
+  workspaceUsers?: WorkspaceUser[];
   db: AppDatabase;
 }
+
+
 

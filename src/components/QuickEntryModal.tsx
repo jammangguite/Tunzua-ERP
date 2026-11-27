@@ -3,6 +3,7 @@ import { useStore } from '../store';
 import { TransactionType } from '../types';
 import { X, Check } from 'lucide-react';
 import { toast } from 'sonner';
+import { computeItemPricing } from '../utils/itemPricing';
 
 interface QuickEntryModalProps {
   isOpen: boolean;
@@ -88,7 +89,7 @@ export const QuickEntryModal: React.FC<QuickEntryModalProps> = ({
   onClose,
   defaultPreset = 'sales' as EntryPreset,
 }) => {
-  const { db, addLedgerTransaction, triggerSync, companySettings } = useStore();
+  const { db, ledgerItems, addLedgerTransaction, triggerSync, companySettings, formatMoney } = useStore();
   const [preset, setPreset] = useState<EntryPreset>(defaultPreset);
   const [date, setDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [reference, setReference] = useState('');
@@ -97,6 +98,7 @@ export const QuickEntryModal: React.FC<QuickEntryModalProps> = ({
   const [debitAccount, setDebitAccount] = useState(PRESET_CONFIG[defaultPreset].debit);
   const [creditAccount, setCreditAccount] = useState(PRESET_CONFIG[defaultPreset].credit);
   const [isBankCleared, setIsBankCleared] = useState(PRESET_CONFIG[defaultPreset].cleared);
+  const [selectedMasterId, setSelectedMasterId] = useState('');
 
   const accountSuggestions = useMemo(() => {
     const base = new Set<string>([
@@ -115,8 +117,76 @@ export const QuickEntryModal: React.FC<QuickEntryModalProps> = ({
       if (tx.debitAccount) base.add(tx.debitAccount);
       if (tx.creditAccount) base.add(tx.creditAccount);
     });
+    ledgerItems.forEach(item => {
+      if (item.kind === 'ledger') base.add(item.name);
+      if (item.accountGroup) base.add(item.accountGroup);
+    });
     return Array.from(base).sort();
-  }, [db.ledger]);
+  }, [db.ledger, ledgerItems]);
+
+  const selectedMaster = useMemo(
+    () => ledgerItems.find(item => item.id === selectedMasterId) || null,
+    [ledgerItems, selectedMasterId]
+  );
+
+  const selectedMasterBreakdown = useMemo(() => {
+    if (!selectedMaster || selectedMaster.defaultPrice === undefined) return null;
+    return computeItemPricing(
+      selectedMaster.defaultPrice,
+      selectedMaster.gstRate,
+      selectedMaster.gstMode,
+      selectedMaster.discount,
+      selectedMaster.discountType
+    );
+  }, [selectedMaster]);
+
+  const duplicateRef = useMemo(() => {
+    const refKey = reference.trim().toLowerCase();
+    if (!refKey) return null;
+    return (
+      db.ledger.find(
+        tx => (tx.reference || '').trim().toLowerCase() === refKey
+      ) || null
+    );
+  }, [db.ledger, reference]);
+
+  const handleSelectMaster = (masterId: string) => {
+    setSelectedMasterId(masterId);
+    const chosen = ledgerItems.find(item => item.id === masterId);
+    if (!chosen) return;
+
+    const parts = [
+      chosen.name,
+      `GST ${chosen.gstRate}% ${chosen.gstMode === 'including' ? 'Incl.' : 'Excl.'}`,
+    ];
+    if (chosen.discount > 0) {
+      parts.push(
+        chosen.discountType === 'percentage'
+          ? `${chosen.discount}% Disc.`
+          : `${formatMoney(chosen.discount)} Disc.`
+      );
+    }
+    setDescription(parts.join(' — '));
+
+    if (chosen.accountGroup) {
+      if (preset === 'sales' || preset === 'receipt') {
+        setCreditAccount(chosen.accountGroup);
+      } else if (preset === 'purchase' || preset === 'payment') {
+        setDebitAccount(chosen.accountGroup);
+      }
+    }
+
+    if (chosen.defaultPrice !== undefined && chosen.defaultPrice > 0) {
+      const calc = computeItemPricing(
+        chosen.defaultPrice,
+        chosen.gstRate,
+        chosen.gstMode,
+        chosen.discount,
+        chosen.discountType
+      );
+      setAmount(calc.finalTotal.toFixed(2));
+    }
+  };
 
   const applyPreset = (next: EntryPreset) => {
     const cfg = PRESET_CONFIG[next];
@@ -133,6 +203,7 @@ export const QuickEntryModal: React.FC<QuickEntryModalProps> = ({
       setDate(new Date().toISOString().split('T')[0]);
       setDescription('');
       setAmount('');
+      setSelectedMasterId('');
     }
   }, [isOpen, defaultPreset]);
 
@@ -168,7 +239,7 @@ export const QuickEntryModal: React.FC<QuickEntryModalProps> = ({
     }
 
     const cfg = PRESET_CONFIG[preset];
-    addLedgerTransaction({
+    const res = addLedgerTransaction({
       id: `${preset}-${Date.now()}`,
       date,
       description: description.trim(),
@@ -179,6 +250,10 @@ export const QuickEntryModal: React.FC<QuickEntryModalProps> = ({
       reference: reference.trim() || `${cfg.refPrefix}-${Date.now().toString().slice(-4)}`,
       isBankCleared,
     });
+    if (!res.ok) {
+      toast.error(res.error || 'Duplicate invoice / reference number is not allowed.');
+      return;
+    }
     triggerSync();
     toast.success(`${cfg.label} entry recorded in ledger.`);
     onClose();
@@ -255,6 +330,45 @@ export const QuickEntryModal: React.FC<QuickEntryModalProps> = ({
             </div>
           </div>
 
+          {ledgerItems.length > 0 && (
+            <div>
+              <label htmlFor="qe-master" className="block text-xs font-medium text-[#6B655C] mb-1.5">
+                Apply Item / Ledger Preset (Optional)
+              </label>
+              <select
+                id="qe-master"
+                value={selectedMasterId}
+                onChange={e => handleSelectMaster(e.target.value)}
+                className="w-full px-3 py-2 bg-[#F8F6F1] border border-[#E5E0D5] rounded-lg text-sm text-[#1F1D1A] focus:outline-none focus:border-[#1B4D3E] focus:bg-[#FFFDF9]"
+              >
+                <option value="">Manual entry</option>
+                {ledgerItems.map(item => (
+                  <option key={item.id} value={item.id}>
+                    {item.name} — {item.gstRate}% {item.gstMode === 'including' ? 'Incl.' : 'Excl.'} GST
+                    {item.discount > 0
+                      ? `, ${item.discountType === 'percentage' ? `${item.discount}%` : formatMoney(item.discount)} off`
+                      : ''}
+                  </option>
+                ))}
+              </select>
+              {selectedMaster && selectedMasterBreakdown && (
+                <div className="mt-1.5 text-[11px] font-mono tabular-nums text-[#6B655C] flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                  <span>Base {formatMoney(selectedMasterBreakdown.baseAmount)}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>Disc -{formatMoney(selectedMasterBreakdown.discountAmount)}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>
+                    GST ({selectedMaster.gstRate}% {selectedMaster.gstMode}) {formatMoney(selectedMasterBreakdown.gstAmount)}
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-semibold text-[#1B4D3E]">
+                    Net {formatMoney(selectedMasterBreakdown.finalTotal)}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label htmlFor="qe-date" className="block text-xs font-medium text-[#6B655C] mb-1.5">
@@ -280,8 +394,17 @@ export const QuickEntryModal: React.FC<QuickEntryModalProps> = ({
                 value={reference}
                 onChange={e => setReference(e.target.value)}
                 placeholder="e.g. INV-2026"
-                className="w-full px-3 py-2 bg-[#F8F6F1] border border-[#E5E0D5] rounded-lg text-sm font-mono text-[#1F1D1A] focus:outline-none focus:border-[#1B4D3E] focus:bg-[#FFFDF9]"
+                className={`w-full px-3 py-2 bg-[#F8F6F1] border rounded-lg text-sm font-mono text-[#1F1D1A] focus:outline-none focus:bg-[#FFFDF9] ${
+                  duplicateRef
+                    ? 'border-[#B91C1C] focus:border-[#B91C1C]'
+                    : 'border-[#E5E0D5] focus:border-[#1B4D3E]'
+                }`}
               />
+              {duplicateRef && (
+                <p className="mt-1 text-[11px] text-[#B91C1C]">
+                  Invoice / reference &ldquo;{duplicateRef.reference}&rdquo; already exists.
+                </p>
+              )}
             </div>
           </div>
 

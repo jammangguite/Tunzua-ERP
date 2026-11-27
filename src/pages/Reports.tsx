@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { FinalAccountsModule } from '../components/FinanceModules';
 import { PayrollModule, BankReconciliation, ForecastingModule } from '../components/SuiteModules';
 import { GstComputationModule } from '../components/GstComputationModule';
 import { AuditModule } from '../components/AuditModule';
 import { ClickablePath } from '../components/ClickablePath';
-import { Download } from 'lucide-react';
+import { Download, Printer } from 'lucide-react';
 import { useStore } from '../store';
 import { exportFinancialPDF } from '../utils/pdfExport';
 import { computeGstFromLedger, downloadGstStatementPdf } from '../utils/gstComputation';
@@ -15,6 +16,7 @@ type ReportTab = 'final_accounts' | 'gst_tax' | 'payroll' | 'reconciliation' | '
 const Reports: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ReportTab>('final_accounts');
   const store = useStore();
+  const outletCtx = useOutletContext<{ openPrintPreview?: () => void }>() || {};
 
   const tabs: { id: ReportTab; label: string }[] = [
     { id: 'final_accounts', label: 'Final Accounts' },
@@ -99,14 +101,25 @@ const Reports: React.FC = () => {
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => handleExport('full')}
-          className="px-4 py-2 bg-[#1B4D3E] hover:bg-[#143B2F] text-[#FFFDF9] text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 self-start md:self-auto"
-        >
-          <Download className="w-3.5 h-3.5" />
-          Download Full Booklet (PDF)
-        </button>
+        <div className="flex flex-wrap items-center gap-2 self-start md:self-auto no-print">
+          <button
+            type="button"
+            onClick={() => (outletCtx.openPrintPreview ? outletCtx.openPrintPreview() : window.print())}
+            className="px-3.5 py-2 bg-[#FFFDF9] hover:bg-[#F2EFE9] text-[#1F1D1A] border border-[#E5E0D5] text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+          >
+            <Printer className="w-3.5 h-3.5 text-[#1B4D3E]" />
+            Print Preview
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleExport('full')}
+            className="px-4 py-2 bg-[#1B4D3E] hover:bg-[#143B2F] text-[#FFFDF9] text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Download Full Booklet (PDF)
+          </button>
+        </div>
       </div>
 
       {/* Quick PDF Exports */}

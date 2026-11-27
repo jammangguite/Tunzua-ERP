@@ -7,7 +7,7 @@ import { Logo } from '../components/Logo';
 
 const Register: React.FC = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, registerWithEmail } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -20,7 +20,7 @@ const Register: React.FC = () => {
     }
   }, [user, navigate]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password || !companyName) {
       toast.error('Please fill in all required fields.');
@@ -32,11 +32,13 @@ const Register: React.FC = () => {
     }
 
     setLoading(true);
-    setTimeout(() => {
-      toast.success(`Welcome to Tunzua, ${email}`);
+    try {
+      await registerWithEmail(email, companyName);
+      toast.success(`Welcome to Tunzua, ${email}. Your data saves to the Admin’s linked Google Sheet.`);
       navigate('/app', { replace: true });
+    } finally {
       setLoading(false);
-    }, 600);
+    }
   };
 
   return (

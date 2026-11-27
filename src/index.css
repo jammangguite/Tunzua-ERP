@@ -190,6 +190,81 @@ body {
   background: #B8AF9F;
 }
 
+/* Archival Print-Only Elements (Hidden on screen, visible in Print Preview & Print) */
+.print-only {
+  display: none;
+}
+
+/* Print Preview Sheet: Mirrors exact @media print CSS rules on screen */
+.print-preview-sheet {
+  background: #ffffff;
+  color: #1F1D1A;
+  font-size: 10.5pt;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.print-preview-sheet header,
+.print-preview-sheet aside,
+.print-preview-sheet button,
+.print-preview-sheet input,
+.print-preview-sheet select,
+.print-preview-sheet textarea,
+.print-preview-sheet .no-print,
+.print-preview-sheet .action-column,
+.print-preview-sheet nav,
+.print-preview-sheet iframe {
+  display: none !important;
+}
+
+.print-preview-sheet .print-only {
+  display: block !important;
+}
+
+.print-preview-sheet.hide-print-letterhead .print-only {
+  display: none !important;
+}
+
+.print-preview-sheet .workspace-content {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+  display: block !important;
+  position: static !important;
+}
+
+.print-preview-sheet table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  margin-top: 12px !important;
+}
+
+.print-preview-sheet th {
+  border-bottom: 1.5px solid #1F1D1A !important;
+  border-top: 1px solid #D5CEBF !important;
+  padding: 7px 10px !important;
+  color: #1F1D1A !important;
+  font-weight: 600 !important;
+  font-size: 9pt !important;
+  background: #F8F6F1 !important;
+}
+
+.print-preview-sheet td {
+  border-bottom: 1px solid #E5E0D5 !important;
+  padding: 7px 10px !important;
+  color: #1F1D1A !important;
+  font-size: 9pt !important;
+}
+
+.print-preview-sheet h1,
+.print-preview-sheet h2,
+.print-preview-sheet h3,
+.print-preview-sheet h4 {
+  color: #1F1D1A !important;
+}
+
 /* Clean Archival Print Styles */
 @media print {
   header,
@@ -202,6 +277,14 @@ body {
   .action-column,
   nav,
   iframe {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  body.hide-print-letterhead .print-only {
     display: none !important;
   }
 

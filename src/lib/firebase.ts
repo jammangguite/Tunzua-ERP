@@ -16,19 +16,16 @@ let isSigningIn = false;
 let cachedAccessToken: string | null = null;
 
 // Initialize auth state listener
+// Keeps returning Firebase users signed in across cold/offline launches of the installed standalone app.
+// The Google Sheets OAuth access token is requested on-demand when syncing to Sheets.
 export const initAuth = (
-  onAuthSuccess?: (user: User, token: string) => void,
+  onAuthSuccess?: (user: User, token: string | null) => void,
   onAuthFailure?: () => void
 ) => {
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
-      if (cachedAccessToken) {
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-      } else if (!isSigningIn) {
-        cachedAccessToken = null;
-        if (onAuthFailure) onAuthFailure();
-      }
-    } else {
+      if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
+    } else if (!isSigningIn) {
       cachedAccessToken = null;
       if (onAuthFailure) onAuthFailure();
     }
@@ -87,20 +84,41 @@ export interface LinkedGoogleSheet {
   spreadsheetUrl: string;
   title: string;
   email: string;
+  adminEmail?: string;
+  linkedByEmail?: string;
   lastSavedAt: string;
+  lastSavedByEmail?: string;
 }
 
-const linkedSheetStorageKey = (email: string) =>
+const WORKSPACE_ADMIN_SHEET_KEY = 'tunzua_workspace_admin_gsheet_v1';
+const legacyLinkedSheetStorageKey = (email: string) =>
   `tunzua_linked_gsheet_v1_${email.trim().toLowerCase()}`;
 
-export const getLinkedSheetForEmail = (email?: string | null): LinkedGoogleSheet | null => {
-  if (!email) return null;
+export const getWorkspaceAdminSheet = (adminEmail?: string | null): LinkedGoogleSheet | null => {
   try {
-    const raw = localStorage.getItem(linkedSheetStorageKey(email));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed.spreadsheetId === 'string') {
-      return parsed as LinkedGoogleSheet;
+    const raw = localStorage.getItem(WORKSPACE_ADMIN_SHEET_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.spreadsheetId === 'string' && parsed.spreadsheetId.trim()) {
+        return parsed as LinkedGoogleSheet;
+      }
+    }
+    // Migrate legacy per-email Admin link if present so existing Admin sheet is never lost
+    if (adminEmail) {
+      const legacyRaw = localStorage.getItem(legacyLinkedSheetStorageKey(adminEmail));
+      if (legacyRaw) {
+        const parsed = JSON.parse(legacyRaw);
+        if (parsed && typeof parsed.spreadsheetId === 'string' && parsed.spreadsheetId.trim()) {
+          const migrated: LinkedGoogleSheet = {
+            ...parsed,
+            adminEmail: adminEmail.trim().toLowerCase(),
+            linkedByEmail: parsed.email || adminEmail.trim().toLowerCase(),
+            lastSavedByEmail: parsed.email || adminEmail.trim().toLowerCase(),
+          };
+          localStorage.setItem(WORKSPACE_ADMIN_SHEET_KEY, JSON.stringify(migrated));
+          return migrated;
+        }
+      }
     }
     return null;
   } catch {
@@ -108,22 +126,154 @@ export const getLinkedSheetForEmail = (email?: string | null): LinkedGoogleSheet
   }
 };
 
-export const saveLinkedSheetForEmail = (link: LinkedGoogleSheet): void => {
-  if (!link.email) return;
+export const saveWorkspaceAdminSheet = (link: LinkedGoogleSheet): void => {
+  if (!link.spreadsheetId) return;
   try {
-    localStorage.setItem(linkedSheetStorageKey(link.email), JSON.stringify(link));
+    localStorage.setItem(WORKSPACE_ADMIN_SHEET_KEY, JSON.stringify(link));
   } catch {
     // Ignore quota errors
   }
 };
 
-export const clearLinkedSheetForEmail = (email?: string | null): void => {
-  if (!email) return;
+export const clearWorkspaceAdminSheet = (): void => {
   try {
-    localStorage.removeItem(linkedSheetStorageKey(email));
+    localStorage.removeItem(WORKSPACE_ADMIN_SHEET_KEY);
   } catch {
     // Ignore storage errors
   }
+};
+
+// Keep backward-compatible aliases pointing strictly to the single Workspace Admin sheet
+export const getLinkedSheetForEmail = (adminEmail?: string | null): LinkedGoogleSheet | null =>
+  getWorkspaceAdminSheet(adminEmail);
+
+export const saveLinkedSheetForEmail = (link: LinkedGoogleSheet): void =>
+  saveWorkspaceAdminSheet(link);
+
+export const clearLinkedSheetForEmail = (): void => clearWorkspaceAdminSheet();
+
+export const fetchWorkspaceAdminSheet = async (
+  fallbackAdminEmail?: string | null
+): Promise<{ sheet: LinkedGoogleSheet | null; adminEmail: string }> => {
+  const fallbackEmail = fallbackAdminEmail || 'jammangguite@gmail.com';
+  try {
+    const res = await fetch('/api/sheet-config');
+    if (res.ok) {
+      const data = await res.json();
+      const resolvedAdminEmail = data.adminEmail || fallbackEmail;
+      if (data.sheet && data.sheet.spreadsheetId) {
+        const sheet: LinkedGoogleSheet = {
+          spreadsheetId: data.sheet.spreadsheetId,
+          spreadsheetUrl: data.sheet.spreadsheetUrl,
+          title: data.sheet.title,
+          email: data.sheet.adminEmail || resolvedAdminEmail,
+          adminEmail: data.sheet.adminEmail || resolvedAdminEmail,
+          linkedByEmail: data.sheet.linkedByEmail || resolvedAdminEmail,
+          lastSavedAt: data.sheet.lastSavedAt || new Date().toISOString(),
+          lastSavedByEmail: data.sheet.lastSavedByEmail || resolvedAdminEmail,
+        };
+        saveWorkspaceAdminSheet(sheet);
+        return { sheet, adminEmail: resolvedAdminEmail };
+      }
+      // If server has no sheet yet, check if we have a legacy migrated Admin sheet locally
+      const localMigrated = getWorkspaceAdminSheet(resolvedAdminEmail);
+      return { sheet: localMigrated, adminEmail: resolvedAdminEmail };
+    }
+  } catch {
+    // Offline fallback to cached workspace Admin sheet
+  }
+  return {
+    sheet: getWorkspaceAdminSheet(fallbackEmail),
+    adminEmail: fallbackEmail,
+  };
+};
+
+export const persistWorkspaceAdminSheet = async (
+  link: LinkedGoogleSheet,
+  actorEmail: string
+): Promise<{ ok: boolean; sheet?: LinkedGoogleSheet; error?: string }> => {
+  try {
+    const res = await fetch('/api/sheet-config', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-tunzua-actor-email': actorEmail,
+      },
+      body: JSON.stringify({
+        spreadsheetId: link.spreadsheetId,
+        spreadsheetUrl: link.spreadsheetUrl,
+        title: link.title,
+        lastSavedAt: link.lastSavedAt,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Only the Workspace Admin can change the linked Google Sheet.' };
+    }
+    const saved: LinkedGoogleSheet = {
+      spreadsheetId: data.sheet.spreadsheetId,
+      spreadsheetUrl: data.sheet.spreadsheetUrl,
+      title: data.sheet.title,
+      email: data.sheet.adminEmail || link.email,
+      adminEmail: data.sheet.adminEmail || link.adminEmail || link.email,
+      linkedByEmail: data.sheet.linkedByEmail || actorEmail,
+      lastSavedAt: data.sheet.lastSavedAt || link.lastSavedAt,
+      lastSavedByEmail: data.sheet.lastSavedByEmail || actorEmail,
+    };
+    saveWorkspaceAdminSheet(saved);
+    return { ok: true, sheet: saved };
+  } catch {
+    saveWorkspaceAdminSheet(link);
+    return { ok: true, sheet: link };
+  }
+};
+
+export const recordWorkspaceSheetSave = async (
+  spreadsheetId: string,
+  lastSavedAt: string,
+  savedByEmail: string
+): Promise<void> => {
+  const existing = getWorkspaceAdminSheet();
+  if (existing && existing.spreadsheetId === spreadsheetId) {
+    saveWorkspaceAdminSheet({
+      ...existing,
+      lastSavedAt,
+      lastSavedByEmail: savedByEmail,
+    });
+  }
+  try {
+    await fetch('/api/sheet-config/saved', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-tunzua-actor-email': savedByEmail,
+      },
+      body: JSON.stringify({ spreadsheetId, lastSavedAt, savedByEmail }),
+    });
+  } catch {
+    // Offline; local mirror already updated
+  }
+};
+
+export const deleteWorkspaceAdminSheet = async (
+  actorEmail: string
+): Promise<{ ok: boolean; error?: string }> => {
+  try {
+    const res = await fetch('/api/sheet-config', {
+      method: 'DELETE',
+      headers: {
+        'x-tunzua-actor-email': actorEmail,
+      },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Only the Workspace Admin can unlink the Google Sheet.' };
+    }
+  } catch {
+    // Offline fallback
+  }
+  clearWorkspaceAdminSheet();
+  return { ok: true };
 };
 
 // -------------------------------------------------------------
@@ -264,6 +414,8 @@ export const exportLedgerToSheet = async (
 export interface WorkspaceSheetPayload {
   token: string;
   email: string;
+  adminEmail?: string;
+  persistAsAdminLink?: boolean;
   spreadsheetId?: string;
   title: string;
   companyName: string;
@@ -283,13 +435,15 @@ export interface WorkspaceSheetResult {
 
 const WORKSPACE_TABS = ['Summary', 'Ledger', 'Recurring Bills', 'Fixed Assets', 'Partners'];
 
-// 3. Save entire Tunzua workspace (Summary, Ledger, Bills, Assets, Partners) to a Google Sheet linked to user email
+// 3. Save entire Tunzua workspace (Summary, Ledger, Bills, Assets, Partners) to the Admin-linked Google Sheet
 export const saveFullWorkspaceToGoogleSheet = async (
   payload: WorkspaceSheetPayload
 ): Promise<WorkspaceSheetResult> => {
   const {
     token,
     email,
+    adminEmail,
+    persistAsAdminLink = false,
     title,
     companyName,
     currencySymbol,
@@ -320,9 +474,14 @@ export const saveFullWorkspaceToGoogleSheet = async (
     if (metaRes.status === 401) {
       throw new Error('Your Google session expired. Please sign in with Google again.');
     }
+    if (metaRes.status === 403) {
+      throw new Error(
+        `Permission denied on the Admin Google Sheet. Ask your Workspace Admin (${adminEmail || 'Admin'}) to share this Google Sheet with ${email} as an Editor.`
+      );
+    }
     if (!metaRes.ok) {
       const errText = await metaRes.text();
-      throw new Error(`Could not open the linked Google Sheet. Check the link or create a new sheet. (${errText})`);
+      throw new Error(`Could not open the linked Admin Google Sheet. (${errText})`);
     }
 
     const meta = await metaRes.json();
@@ -389,7 +548,8 @@ export const saveFullWorkspaceToGoogleSheet = async (
   const summaryRows = [
     ['Tunzua Ledger Snapshot', ''],
     ['Company / Workspace', companyName],
-    ['Linked Google Email', email],
+    ['Admin Sheet Owner', adminEmail || email],
+    ['Last Saved By', email],
     ['Currency', currencySymbol],
     ['Last Saved (ISO)', savedAt],
     ['', ''],
@@ -506,16 +666,26 @@ export const saveFullWorkspaceToGoogleSheet = async (
     if (writeRes.status === 401) {
       throw new Error('Your Google session expired. Please sign in with Google again.');
     }
+    if (writeRes.status === 403) {
+      throw new Error(
+        `Permission denied writing to the Admin Google Sheet. Ask your Workspace Admin (${adminEmail || 'Admin'}) to share this sheet with ${email} as an Editor.`
+      );
+    }
     throw new Error(`Failed to write data to Google Sheet: ${writeRes.statusText} (${errText})`);
   }
 
-  saveLinkedSheetForEmail({
-    spreadsheetId,
-    spreadsheetUrl,
-    title: resolvedTitle,
-    email,
-    lastSavedAt: savedAt,
-  });
+  if (persistAsAdminLink) {
+    saveWorkspaceAdminSheet({
+      spreadsheetId,
+      spreadsheetUrl,
+      title: resolvedTitle,
+      email: adminEmail || email,
+      adminEmail: adminEmail || email,
+      linkedByEmail: email,
+      lastSavedAt: savedAt,
+      lastSavedByEmail: email,
+    });
+  }
 
   return {
     spreadsheetId,

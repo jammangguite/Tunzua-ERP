@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useStore } from '../store';
 import { useAuth } from '../lib/auth';
@@ -6,9 +6,11 @@ import { PINPad } from './PINPad';
 import { Logo } from './Logo';
 import { QuickEntryModal, EntryPreset } from './QuickEntryModal';
 import { GlobalSearchModal } from './GlobalSearchModal';
-import { SettingsModal } from './SettingsModal';
 import { GoogleSheetsSyncModal } from './GoogleSheetsSyncModal';
+import { PrintPreviewModal } from './PrintPreviewModal';
 import { ClickablePath } from './ClickablePath';
+import { PWAInstallButton } from './PWAInstallButton';
+import { OneClickInstallBanner } from './OneClickInstallBanner';
 import { getBillStatusMeta } from '../pages/RecurringBills';
 import {
   Menu,
@@ -19,6 +21,7 @@ import {
   LogOut,
   X,
   FileSpreadsheet,
+  Printer,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -42,6 +45,7 @@ const ROUTE_META: Record<string, { group: string; label: string; preset?: EntryP
   '/app/parties': { group: 'Assets & Reports', label: 'Sundry Parties', preset: 'sales' },
   '/app/assets': { group: 'Assets & Reports', label: 'Fixed Assets', preset: 'purchase' },
   '/app/reports': { group: 'Assets & Reports', label: 'Financial Reports', preset: 'sales' },
+  '/app/settings': { group: 'Workspace', label: 'Settings', preset: 'sales' },
 };
 
 const Layout: React.FC = () => {
@@ -55,10 +59,27 @@ const Layout: React.FC = () => {
   );
   const [showQuickEntry, setShowQuickEntry] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const [showSheetsSync, setShowSheetsSync] = useState(false);
+  const [showPrintPreview, setShowPrintPreview] = useState(false);
+  const mainContentRef = useRef<HTMLElement>(null);
 
-  const { companySettings, recurringBills, hasPasscode, isUnlocked, lockNow } = store;
+  const {
+    companySettings,
+    recurringBills,
+    hasPasscode,
+    isUnlocked,
+    lockNow,
+    activeUser,
+    activeRole,
+    isPreviewingRole,
+    setActingUserId,
+    syncSignedInIdentity,
+  } = store;
+
+  // Sync signed-in Firebase account with workspace multi-user directory
+  useEffect(() => {
+    syncSignedInIdentity(user?.email || null, user?.displayName || null);
+  }, [user?.email, user?.displayName]);
 
   // Count bills needing attention (overdue or due soon)
   const attentionBillsCount = useMemo(() => {
@@ -84,14 +105,14 @@ const Layout: React.FC = () => {
           target.tagName === 'SELECT' ||
           target.isContentEditable);
 
-      if (!isTyping && !showQuickEntry && !showSearch && !showSettings && !showSheetsSync && e.key.toLowerCase() === 'n' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      if (!isTyping && !showQuickEntry && !showSearch && !showSheetsSync && !showPrintPreview && e.key.toLowerCase() === 'n' && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
         setShowQuickEntry(true);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showQuickEntry, showSearch, showSettings, showSheetsSync]);
+  }, [showQuickEntry, showSearch, showSheetsSync, showPrintPreview]);
 
   const handleLogout = async () => {
     try {
@@ -253,15 +274,34 @@ const Layout: React.FC = () => {
             Save to Google Sheet
           </button>
 
+          <button
+            type="button"
+            onClick={() => setShowPrintPreview(true)}
+            className="w-full px-3 py-2 text-xs font-medium text-[#1F1D1A] hover:bg-[#EAE5DB] rounded-lg transition-colors flex items-center gap-2 cursor-pointer whitespace-nowrap"
+          >
+            <Printer className="w-3.5 h-3.5 text-[#6B655C] shrink-0" />
+            Print Preview
+          </button>
+
+          <PWAInstallButton variant="sidebar" />
+
           <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setShowSettings(true)}
-              className="flex-1 px-3 py-2 text-xs font-medium text-[#1F1D1A] hover:bg-[#EAE5DB] rounded-lg transition-colors flex items-center gap-2 cursor-pointer whitespace-nowrap"
+            <NavLink
+              to="/app/settings"
+              onClick={() => {
+                if (window.innerWidth < 1024) setIsSidebarOpen(false);
+              }}
+              className={({ isActive }) =>
+                `flex-1 px-3 py-2 text-xs rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap ${
+                  isActive
+                    ? 'bg-[#FFFDF9] text-[#1B4D3E] font-semibold border border-[#D5CEBF]'
+                    : 'font-medium text-[#1F1D1A] hover:bg-[#EAE5DB] border border-transparent'
+                }`
+              }
             >
               <Settings className="w-3.5 h-3.5 text-[#6B655C]" />
               Settings
-            </button>
+            </NavLink>
             {hasPasscode && (
               <button
                 type="button"
@@ -275,11 +315,35 @@ const Layout: React.FC = () => {
             )}
           </div>
 
+          {isPreviewingRole && (
+            <div className="px-2.5 py-2 bg-[#FFFDF9] border border-[#D5CEBF] rounded-lg space-y-1.5">
+              <div className="text-[11px] text-[#B45309] font-medium leading-snug">
+                Viewing as {activeUser.name} · {activeRole === 'admin' ? 'Admin' : 'User'}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setActingUserId(null);
+                  toast.success('Returned to Admin access.');
+                }}
+                className="w-full px-2.5 py-1 bg-[#1B4D3E] hover:bg-[#143B2F] text-[#FFFDF9] text-[11px] font-semibold rounded-md transition-colors cursor-pointer"
+              >
+                Return to Admin
+              </button>
+            </div>
+          )}
+
           {user ? (
             <div className="px-2.5 py-1.5 flex items-center justify-between gap-2 text-xs text-[#6B655C]">
-              <span className="truncate" title={user.email || user.displayName || ''}>
-                {user.displayName || user.email}
-              </span>
+              <div className="min-w-0">
+                <div className="truncate text-[#1F1D1A] font-medium" title={user.email || user.displayName || ''}>
+                  {user.displayName || user.email}
+                </div>
+                <div className="text-[11px] text-[#6B655C] truncate">
+                  {activeRole === 'admin' ? 'Admin' : 'User'}
+                  {isPreviewingRole ? ' · Preview' : ''}
+                </div>
+              </div>
               <button
                 type="button"
                 onClick={handleLogout}
@@ -291,13 +355,18 @@ const Layout: React.FC = () => {
               </button>
             </div>
           ) : (
-            <button
-              type="button"
-              onClick={handleGoogleLogin}
-              className="w-full px-3 py-1.5 text-xs font-medium text-[#6B655C] hover:text-[#1F1D1A] hover:bg-[#EAE5DB] rounded-lg transition-colors text-left cursor-pointer"
-            >
-              Sign in with Google
-            </button>
+            <div className="px-2.5 py-1 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={handleGoogleLogin}
+                className="text-xs font-medium text-[#6B655C] hover:text-[#1F1D1A] transition-colors text-left cursor-pointer"
+              >
+                Sign in with Google
+              </button>
+              <span className="text-[11px] font-medium text-[#1B4D3E]">
+                {activeRole === 'admin' ? 'Admin' : 'User'}
+              </span>
+            </div>
           )}
         </div>
       </aside>
@@ -344,6 +413,8 @@ const Layout: React.FC = () => {
               <Search className="w-4 h-4" />
             </button>
 
+            <PWAInstallButton variant="header" />
+
             <button
               type="button"
               onClick={() => setShowQuickEntry(true)}
@@ -356,8 +427,61 @@ const Layout: React.FC = () => {
         </header>
 
         {/* Active Route Viewport */}
-        <main className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 pb-24 workspace-content">
-          <Outlet context={{ openSheetsSync: () => setShowSheetsSync(true), openQuickEntry: () => setShowQuickEntry(true) }} />
+        <main
+          ref={mainContentRef}
+          className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 pb-24 workspace-content"
+        >
+          {/* Archival Print-Only Letterhead (rendered in Print Preview & browser print) */}
+          <div className="print-only pb-3 mb-5 border-b-2 border-[#1B4D3E]">
+            <div className="flex items-end justify-between gap-4">
+              <div>
+                <div className="font-display text-xl font-semibold text-[#1F1D1A] leading-tight">
+                  {companySettings.name || 'Tunzua'}
+                </div>
+                <div className="text-xs text-[#6B655C] mt-0.5">
+                  {companySettings.subtitle || 'Simple Double-Entry Ledger'}
+                </div>
+              </div>
+              <div className="text-right text-xs text-[#6B655C]">
+                <div className="font-semibold text-[#1F1D1A]">{currentMeta.label}</div>
+                <div className="font-mono tabular-nums mt-0.5">
+                  Printed {new Date().toISOString().split('T')[0]} · Currency {companySettings.currencySymbol || '$'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <OneClickInstallBanner />
+
+          {isPreviewingRole && (
+            <div className="mb-5 px-4 py-2.5 bg-[#FFFDF9] border border-[#E5E0D5] rounded-lg flex flex-wrap items-center justify-between gap-3 no-print">
+              <div className="text-xs text-[#6B655C]">
+                <span className="font-semibold text-[#B45309]">Role Preview Active</span>
+                <span className="mx-1.5" aria-hidden="true">·</span>
+                <span>
+                  Viewing as <strong className="text-[#1F1D1A]">{activeUser.name}</strong> ({activeRole === 'admin' ? 'Admin' : 'User'}) — Delete actions are hidden.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setActingUserId(null);
+                  toast.success('Returned to Admin access.');
+                }}
+                className="px-3 py-1.5 bg-[#1B4D3E] hover:bg-[#143B2F] text-[#FFFDF9] text-xs font-semibold rounded-md transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              >
+                Return to Admin
+              </button>
+            </div>
+          )}
+
+          <Outlet
+            context={{
+              openSheetsSync: () => setShowSheetsSync(true),
+              openQuickEntry: () => setShowQuickEntry(true),
+              openPrintPreview: () => setShowPrintPreview(true),
+            }}
+          />
         </main>
       </div>
 
@@ -380,17 +504,15 @@ const Layout: React.FC = () => {
         defaultPreset={currentMeta.preset || 'sales'}
       />
       <GlobalSearchModal isOpen={showSearch} onClose={() => setShowSearch(false)} />
-      <SettingsModal
-        isOpen={showSettings}
-        onClose={() => setShowSettings(false)}
-        onOpenGoogleSheets={() => {
-          setShowSettings(false);
-          setShowSheetsSync(true);
-        }}
-      />
       <GoogleSheetsSyncModal
         isOpen={showSheetsSync}
         onClose={() => setShowSheetsSync(false)}
+      />
+      <PrintPreviewModal
+        isOpen={showPrintPreview}
+        onClose={() => setShowPrintPreview(false)}
+        sourceRef={mainContentRef}
+        documentTitle={currentMeta.label}
       />
     </div>
   );

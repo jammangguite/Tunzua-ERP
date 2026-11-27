@@ -76,6 +76,7 @@ const RecurringBills: React.FC = () => {
     updateRecurringBill,
     deleteRecurringBill,
     payRecurringBill,
+    permissions,
     formatMoney,
     companySettings,
     triggerSync,
@@ -350,7 +351,7 @@ const RecurringBills: React.FC = () => {
                       {formatMoney(bill.amount)}
                     </td>
                     <td className="py-3.5 px-4 text-right whitespace-nowrap no-print">
-                      {confirmDeleteId === bill.id ? (
+                      {permissions.canDelete && confirmDeleteId === bill.id ? (
                         <div className="inline-flex items-center gap-1.5">
                           <button
                             type="button"
@@ -411,14 +412,16 @@ const RecurringBills: React.FC = () => {
                               <Play className="w-3.5 h-3.5" />
                             )}
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteId(bill.id)}
-                            className="p-1.5 text-[#6B655C] hover:text-[#B91C1C] hover:bg-[#FEF2F2] rounded-md transition-colors cursor-pointer"
-                            title="Delete bill"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          {permissions.canDelete && (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteId(bill.id)}
+                              className="p-1.5 text-[#6B655C] hover:text-[#B91C1C] hover:bg-[#FEF2F2] rounded-md transition-colors cursor-pointer"
+                              title="Delete bill"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       )}
                     </td>

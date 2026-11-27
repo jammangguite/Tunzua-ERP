@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../store';
 import { PartnerCapital } from '../types';
-import { Plus, Search, Trash2, X } from 'lucide-react';
+import { Plus, Pencil, Search, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { ClickablePath } from '../components/ClickablePath';
 
@@ -23,7 +23,7 @@ const DEFAULT_LOCAL_SUNDRIES: LocalSundryParty[] = [
 
 const Parties: React.FC = () => {
   const store = useStore();
-  const { db, triggerSync, formatMoney, companySettings } = store;
+  const { db, permissions, triggerSync, formatMoney, companySettings } = store;
 
   const [activeTab, setActiveTab] = useState<'sundry' | 'partners'>('sundry');
   const [searchQuery, setSearchQuery] = useState('');
@@ -43,6 +43,7 @@ const Parties: React.FC = () => {
   }, [sundries]);
 
   const [showAddModal, setShowAddModal] = useState(false);
+  const [editingPartyId, setEditingPartyId] = useState<string | null>(null);
   const [partyName, setPartyName] = useState('');
   const [partyGroup, setPartyGroup] = useState<'debtor' | 'creditor'>('debtor');
   const [contactPerson, setContactPerson] = useState('');
@@ -70,23 +71,66 @@ const Parties: React.FC = () => {
     return p.partnerName.toLowerCase().includes(searchQuery.toLowerCase());
   });
 
+  const openNewPartyModal = () => {
+    setEditingPartyId(null);
+    setPartyName('');
+    setPartyGroup('debtor');
+    setContactPerson('');
+    setPhone('');
+    setEmail('');
+    setGstIn('');
+    setShowAddModal(true);
+  };
+
+  const openEditPartyModal = (party: LocalSundryParty) => {
+    setEditingPartyId(party.id);
+    setPartyName(party.name);
+    setPartyGroup(party.group);
+    setContactPerson(party.contactPerson);
+    setPhone(party.phone);
+    setEmail(party.email);
+    setGstIn(party.gstIn || '');
+    setShowAddModal(true);
+  };
+
   const handleAddSundry = (e: React.FormEvent) => {
     e.preventDefault();
     if (!partyName.trim() || !contactPerson.trim()) {
       toast.error('Please enter both a business name and contact person.');
       return;
     }
-    const newParty: LocalSundryParty = {
-      id: `sun-${Date.now()}`,
-      name: partyName.trim(),
-      group: partyGroup,
-      contactPerson: contactPerson.trim(),
-      phone: phone.trim(),
-      email: email.trim(),
-      gstIn: gstIn.trim() || undefined,
-    };
-    setSundries([newParty, ...sundries]);
-    toast.success(`${partyGroup === 'debtor' ? 'Customer' : 'Vendor'} added.`);
+
+    if (editingPartyId) {
+      setSundries(prev =>
+        prev.map(item =>
+          item.id === editingPartyId
+            ? {
+                ...item,
+                name: partyName.trim(),
+                group: partyGroup,
+                contactPerson: contactPerson.trim(),
+                phone: phone.trim(),
+                email: email.trim(),
+                gstIn: gstIn.trim() || undefined,
+              }
+            : item
+        )
+      );
+      toast.success(`${partyGroup === 'debtor' ? 'Customer' : 'Vendor'} updated.`);
+    } else {
+      const newParty: LocalSundryParty = {
+        id: `sun-${Date.now()}`,
+        name: partyName.trim(),
+        group: partyGroup,
+        contactPerson: contactPerson.trim(),
+        phone: phone.trim(),
+        email: email.trim(),
+        gstIn: gstIn.trim() || undefined,
+      };
+      setSundries([newParty, ...sundries]);
+      toast.success(`${partyGroup === 'debtor' ? 'Customer' : 'Vendor'} added.`);
+    }
+    setEditingPartyId(null);
     setShowAddModal(false);
     setPartyName('');
     setContactPerson('');
@@ -165,7 +209,7 @@ const Parties: React.FC = () => {
 
           <button
             type="button"
-            onClick={() => (activeTab === 'sundry' ? setShowAddModal(true) : setShowPartnerModal(true))}
+            onClick={() => (activeTab === 'sundry' ? openNewPartyModal() : setShowPartnerModal(true))}
             className="px-4 py-2 bg-[#1B4D3E] hover:bg-[#143B2F] text-[#FFFDF9] font-semibold text-xs rounded-lg flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -252,11 +296,12 @@ const Parties: React.FC = () => {
                     <td className="py-3.5 px-4 font-mono text-xs text-[#6B655C]">{s.email || '—'}</td>
                     <td className="py-3.5 px-4 font-mono text-xs text-[#6B655C]">{s.gstIn || '—'}</td>
                     <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                      {confirmDeleteId === s.id ? (
+                      {permissions.canDelete && confirmDeleteId === s.id ? (
                         <div className="inline-flex items-center gap-1.5">
                           <button
                             type="button"
                             onClick={() => {
+                              if (!permissions.canDelete) return;
                               setSundries(sundries.filter(item => item.id !== s.id));
                               setConfirmDeleteId(null);
                               toast.success('Party removed.');
@@ -274,13 +319,26 @@ const Parties: React.FC = () => {
                           </button>
                         </div>
                       ) : (
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteId(s.id)}
-                          className="p-1.5 text-[#6B655C] hover:text-[#B91C1C] hover:bg-[#FEF2F2] rounded-md transition-colors cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => openEditPartyModal(s)}
+                            className="p-1.5 text-[#6B655C] hover:text-[#1B4D3E] hover:bg-[#F2EFE9] rounded-md transition-colors cursor-pointer"
+                            title="Edit party"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          {permissions.canDelete && (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteId(s.id)}
+                              className="p-1.5 text-[#6B655C] hover:text-[#B91C1C] hover:bg-[#FEF2F2] rounded-md transition-colors cursor-pointer"
+                              title="Remove party"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -333,10 +391,15 @@ const Parties: React.FC = () => {
             onClick={e => e.stopPropagation()}
           >
             <div className="px-6 py-4 border-b border-[#E5E0D5] flex justify-between items-center bg-[#F8F6F1]">
-              <h2 className="font-display text-lg font-semibold text-[#1F1D1A]">Add Sundry Party</h2>
+              <h2 className="font-display text-lg font-semibold text-[#1F1D1A]">
+                {editingPartyId ? 'Edit Sundry Party' : 'Add Sundry Party'}
+              </h2>
               <button
                 type="button"
-                onClick={() => setShowAddModal(false)}
+                onClick={() => {
+                  setEditingPartyId(null);
+                  setShowAddModal(false);
+                }}
                 className="p-1.5 text-[#6B655C] hover:text-[#1F1D1A] rounded-lg cursor-pointer"
               >
                 <X className="w-4 h-4" />
@@ -409,7 +472,10 @@ const Parties: React.FC = () => {
               <div className="pt-3 border-t border-[#E5E0D5] flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(false)}
+                  onClick={() => {
+                    setEditingPartyId(null);
+                    setShowAddModal(false);
+                  }}
                   className="px-4 py-2 text-xs font-medium text-[#6B655C] rounded-lg cursor-pointer"
                 >
                   Cancel
@@ -418,7 +484,7 @@ const Parties: React.FC = () => {
                   type="submit"
                   className="px-5 py-2 bg-[#1B4D3E] hover:bg-[#143B2F] text-[#FFFDF9] font-semibold text-xs rounded-lg cursor-pointer"
                 >
-                  Save Party
+                  {editingPartyId ? 'Update Party' : 'Save Party'}
                 </button>
               </div>
             </form>

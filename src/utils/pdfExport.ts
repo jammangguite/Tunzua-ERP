@@ -962,17 +962,28 @@ export const exportSingleInvoicePDF = (tx: any, isPurchase = false) => {
   doc.text('TAX ($)', margin + 158, tableY + 5.5, { align: 'center' });
   doc.text('AMOUNT ($)', margin + 177, tableY + 5.5, { align: 'right' });
 
-  // Rows (Let's split the amount to simulate tax calculations: 18% GST built-in)
+  // Rows (Use actual entry GST metadata when present, else default to 18% GST built-in)
   const totalVal = tx.amount;
-  const taxableVal = totalVal / 1.18;
-  const cgstVal = (totalVal - taxableVal) / 2;
-  const sgstVal = (totalVal - taxableVal) / 2;
-  const totalTaxVal = cgstVal + sgstVal;
+  const hasExplicitGst = typeof tx.gstRate === 'number' && typeof tx.taxableAmount === 'number';
+  const effectiveGstRate = hasExplicitGst ? tx.gstRate : 18;
+  const taxableVal = hasExplicitGst
+    ? tx.taxableAmount
+    : effectiveGstRate > 0
+      ? totalVal / (1 + effectiveGstRate / 100)
+      : totalVal;
+  const totalTaxVal = hasExplicitGst && typeof tx.gstAmount === 'number'
+    ? tx.gstAmount
+    : Math.max(0, totalVal - taxableVal);
+  const isInterState = tx.gstSupplyType === 'inter';
+  const igstVal = isInterState ? totalTaxVal : 0;
+  const cgstVal = isInterState ? 0 : (typeof tx.cgstAmount === 'number' ? tx.cgstAmount : totalTaxVal / 2);
+  const sgstVal = isInterState ? 0 : (typeof tx.sgstAmount === 'number' ? tx.sgstAmount : totalTaxVal - cgstVal);
+  const cleanDescription = String(tx.description || '').replace(/\s*\[GST Rule Compliant:[^\]]*\]/g, '').trim();
 
   const rowY = tableY + 15;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
-  doc.text(tx.description.substring(0, 50).toUpperCase(), margin + 3, rowY);
+  doc.text(cleanDescription.substring(0, 50).toUpperCase(), margin + 3, rowY);
   
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
@@ -984,11 +995,11 @@ export const exportSingleInvoicePDF = (tx: any, isPurchase = false) => {
   doc.text('1 PCS', margin + 114, rowY, { align: 'center' });
   doc.text(taxableVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), margin + 138, rowY, { align: 'right' });
   
-  // Show 18% tax breakdown
+  // Show tax breakdown using entry's computed GST percentage
   doc.text(totalTaxVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), margin + 158, rowY, { align: 'center' });
   doc.setFontSize(6.5);
   doc.setTextColor(100, 116, 139);
-  doc.text('(18%)', margin + 158, rowY + 3.5, { align: 'center' });
+  doc.text(`(${effectiveGstRate}%)`, margin + 158, rowY + 3.5, { align: 'center' });
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
@@ -1068,13 +1079,20 @@ export const exportSingleInvoicePDF = (tx: any, isPurchase = false) => {
   doc.text('Taxable Amount', rightAlignX - 45, ry);
   doc.text(taxableVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), rightAlignX, ry, { align: 'right' });
 
-  ry += 4.5;
-  doc.text('CGST @9%', rightAlignX - 45, ry);
-  doc.text(cgstVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), rightAlignX, ry, { align: 'right' });
+  if (isInterState) {
+    ry += 4.5;
+    doc.text(`IGST @${effectiveGstRate}%`, rightAlignX - 45, ry);
+    doc.text(igstVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), rightAlignX, ry, { align: 'right' });
+  } else {
+    const halfRate = effectiveGstRate / 2;
+    ry += 4.5;
+    doc.text(`CGST @${halfRate}%`, rightAlignX - 45, ry);
+    doc.text(cgstVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), rightAlignX, ry, { align: 'right' });
 
-  ry += 4.5;
-  doc.text('SGST @9%', rightAlignX - 45, ry);
-  doc.text(sgstVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), rightAlignX, ry, { align: 'right' });
+    ry += 4.5;
+    doc.text(`SGST @${halfRate}%`, rightAlignX - 45, ry);
+    doc.text(sgstVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), rightAlignX, ry, { align: 'right' });
+  }
 
   // Divider
   doc.setDrawColor(203, 213, 225);
